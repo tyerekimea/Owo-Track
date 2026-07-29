@@ -5,7 +5,7 @@ A minimal expense tracker for small and medium scale enterprises.
 ## Stack
 - **Frontend:** React (Vite)
 - **Backend:** Node.js + Express
-- **Storage:** JSON file (`backend/data.json`) — swap for a real DB later
+- **Storage:** SQLite via Node's built-in `node:sqlite` module (`backend/owotrack.db`) — no native build tools required, just Node ≥ 22.5.0
 
 ## Features (MVP)
 - Add an expense (amount, category, vendor, description, date)
@@ -36,5 +36,10 @@ override with a `.env` file, see `.env.example`)
 - User accounts / multi-branch support
 - Recurring expenses & budgets per category
 - CSV/PDF export
-- Move storage to SQLite or Postgres
 - Charts (spend over time, category breakdown)
+
+## Notes
+- `node:sqlite` is still an experimental Node API — you'll see a one-line experimental
+  warning in the console when the server starts. It's safe to ignore for this MVP; if it
+  becomes a blocker later, the queries are plain SQL and would port easily to `better-sqlite3`
+  or `pg` (Postgres).
