@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
+const path = require("node:path");
+const fs = require("node:fs");
 const { v4: uuidv4 } = require("uuid");
 const db = require("./db");
 const { UPLOAD_DIR, buildAttachmentName } = require("./storage");
@@ -27,7 +29,6 @@ const CATEGORIES = [
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
-app.use("/uploads", express.static(UPLOAD_DIR));
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -242,7 +243,7 @@ app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (r
     return res.status(400).json({ error: "A file is required." });
   }
 
-  const uploadedUrl = `/uploads/${req.file.filename}`;
+  const uploadedUrl = `/api/expenses/${req.params.id}/attachment/file`;
 
   db.prepare(
     "UPDATE expenses SET attachment_name = ?, attachment_url = ? WHERE id = ? AND user_id = ?"
@@ -254,6 +255,29 @@ app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (r
       url: uploadedUrl,
     },
   });
+});
+
+app.get("/api/expenses/:id/attachment/file", authenticate, (req, res) => {
+  const expense = db
+    .prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?")
+    .get(req.params.id, req.userId);
+
+  if (!expense || !expense.attachment_name) {
+    return res.status(404).json({ error: "Attachment not found." });
+  }
+
+  const filePath = path.join(UPLOAD_DIR, expense.attachment_name);
+
+  // Guard against the resolved path ever escaping the uploads directory.
+  if (!filePath.startsWith(UPLOAD_DIR)) {
+    return res.status(400).json({ error: "Invalid file path." });
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Attachment not found." });
+  }
+
+  res.sendFile(filePath);
 });
 
 app.delete("/api/expenses/:id", authenticate, (req, res) => {

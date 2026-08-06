@@ -302,8 +302,17 @@ button.delete {
   flex-direction: column;
   gap: 0.25rem;
 }
-.amount-cell a {
+.amount-cell a,
+.view-attachment {
   color: var(--brand);
   text-decoration: none;
   font-size: 0.75rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.view-attachment:hover {
+  text-decoration: underline;
 }

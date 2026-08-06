@@ -232,6 +232,24 @@ export default function App() {
     loadAll();
   }
 
+  async function handleViewAttachment(expenseId) {
+    try {
+      const response = await fetch(`${API_URL}/api/expenses/${expenseId}/attachment/file`, {
+        headers: getAuthHeaders(),
+      });
+      if (!response.ok) {
+        throw new Error("Could not load attachment.");
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      window.open(objectUrl, "_blank", "noopener,noreferrer");
+      // Release the blob URL once the browser's had a moment to open it.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+    } catch (err) {
+      setError(err.message || "Could not load attachment.");
+    }
+  }
+
   async function handleSetBudget(category) {
     const value = budgetDrafts[category];
     if (value === undefined || value === "") return;
@@ -503,7 +521,13 @@ export default function App() {
                   <div className="amount-cell">
                     <span>₦{e.amount.toLocaleString()}</span>
                     {e.attachment_url && (
-                      <a href={`${API_URL}${e.attachment_url}`} target="_blank" rel="noreferrer">View file</a>
+                      <button
+                        type="button"
+                        className="view-attachment"
+                        onClick={() => handleViewAttachment(e.id)}
+                      >
+                        View file
+                      </button>
                     )}
                   </div>
                 </td>
