@@ -29,9 +29,67 @@ header h1 {
   margin: 0;
   font-size: 1.75rem;
 }
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
 .subtitle {
   margin: 0.25rem 0 1.5rem;
   color: var(--text-muted);
+}
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.auth-card {
+  width: min(100%, 420px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+.auth-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.auth-toggle button {
+  background: #f3f4f6;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem;
+  cursor: pointer;
+}
+.auth-toggle button.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.logout-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
 }
 
 section {
@@ -102,6 +160,7 @@ input, select {
   font-size: 0.95rem;
   color: var(--text);
   background: #fff;
+  width: 100%;
 }
 button[type="submit"] {
   background: var(--brand);
@@ -114,6 +173,10 @@ button[type="submit"] {
 }
 button[type="submit"]:hover {
   background: var(--brand-dark);
+}
+button[type="submit"]:disabled {
+  opacity: 0.7;
+  cursor: wait;
 }
 .error {
   color: var(--danger);
@@ -159,4 +222,88 @@ button.delete {
   color: var(--danger);
   cursor: pointer;
   font-size: 0.9rem;
+}
+
+.month-label {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.budget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+.budget-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+.budget-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.clear-budget {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.budget-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #eee;
+  overflow: hidden;
+  margin-bottom: 0.35rem;
+}
+.budget-bar-fill {
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.2s ease;
+}
+.budget-bar-fill.over {
+  background: var(--danger);
+}
+.budget-status {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.budget-status.over {
+  color: var(--danger);
+  font-weight: 600;
+}
+.budget-set {
+  display: flex;
+  gap: 0.4rem;
+}
+.budget-set input {
+  flex: 1;
+  min-width: 0;
+}
+.budget-set button {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0 0.7rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.amount-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.amount-cell a {
+  color: var(--brand);
+  text-decoration: none;
+  font-size: 0.75rem;
 }

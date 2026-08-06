@@ -1,11 +1,66 @@
 import { useEffect, useState } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const STORAGE_KEY = "owo-track-token";
+
+function getToken() {
+  return localStorage.getItem(STORAGE_KEY) || "";
+}
+
+function getAuthHeaders(extra = {}) {
+  const token = getToken();
+  return {
+    ...extra,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = getAuthHeaders({
+    "Content-Type": "application/json",
+    ...(options.headers || {}),
+  });
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  if (response.status === 401) {
+    localStorage.removeItem(STORAGE_KEY);
+    window.location.reload();
+    return null;
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Request failed.");
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
 
 export default function App() {
+  const [token, setToken] = useState(getToken());
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [isLoadingUser, setIsLoadingUser] = useState(false);
   const [categories, setCategories] = useState([]);
   const [expenses, setExpenses] = useState([]);
-  const [summary, setSummary] = useState({ totalsByCategory: {}, grandTotal: 0, count: 0 });
+  const [summary, setSummary] = useState({
+    totalsByCategory: {},
+    grandTotal: 0,
+    count: 0,
+    month: "",
+    monthSpentByCategory: {},
+    budgets: {},
+  });
   const [form, setForm] = useState({
     amount: "",
     category: "",
@@ -15,56 +70,261 @@ export default function App() {
   });
   const [error, setError] = useState("");
   const [filterCategory, setFilterCategory] = useState("");
+  const [budgetDrafts, setBudgetDrafts] = useState({});
+  const [uploading, setUploading] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState(null);
+
+  useEffect(() => {
+    const storedToken = getToken();
+    if (!storedToken) {
+      setUser(null);
+      return;
+    }
+
+    setIsLoadingUser(true);
+    apiFetch("/api/auth/me")
+      .then((data) => {
+        if (data?.user) {
+          setUser(data.user);
+        } else {
+          setUser(null);
+          localStorage.removeItem(STORAGE_KEY);
+          setToken("");
+        }
+      })
+      .catch(() => {
+        setUser(null);
+        localStorage.removeItem(STORAGE_KEY);
+        setToken("");
+      })
+      .finally(() => setIsLoadingUser(false));
+  }, [token]);
 
   async function loadAll() {
+    if (!token) return;
+
     const [catsRes, expRes, sumRes] = await Promise.all([
-      fetch(`${API_URL}/api/categories`),
-      fetch(`${API_URL}/api/expenses${filterCategory ? `?category=${filterCategory}` : ""}`),
-      fetch(`${API_URL}/api/summary`),
+      apiFetch("/api/categories"),
+      apiFetch(`/api/expenses${filterCategory ? `?category=${filterCategory}` : ""}`),
+      apiFetch("/api/summary"),
     ]);
-    setCategories(await catsRes.json());
-    setExpenses(await expRes.json());
-    setSummary(await sumRes.json());
+
+    setCategories(catsRes || []);
+    setExpenses(expRes || []);
+    setSummary(sumRes || {
+      totalsByCategory: {},
+      grandTotal: 0,
+      count: 0,
+      month: "",
+      monthSpentByCategory: {},
+      budgets: {},
+    });
   }
 
   useEffect(() => {
-    loadAll();
+    if (token) {
+      loadAll();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCategory]);
+  }, [token, filterCategory]);
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    setAuthError("");
+
+    try {
+      const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+      const payload = authMode === "login"
+        ? { email: authForm.email, password: authForm.password }
+        : { name: authForm.name, email: authForm.email, password: authForm.password };
+
+      const data = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(json.error || "Authentication failed.");
+        }
+        return json;
+      });
+
+      localStorage.setItem(STORAGE_KEY, data.token);
+      setToken(data.token);
+      setUser(data.user);
+      setAuthForm({ name: "", email: "", password: "" });
+    } catch (error) {
+      setAuthError(error.message || "Authentication failed.");
+    }
+  }
+
+  async function handleLogout() {
+    if (!token) return;
+
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch (error) {
+      // Ignore logout errors and still clear the local session.
+    } finally {
+      localStorage.removeItem(STORAGE_KEY);
+      setToken("");
+      setUser(null);
+      setCategories([]);
+      setExpenses([]);
+      setSummary({
+        totalsByCategory: {},
+        grandTotal: 0,
+        count: 0,
+        month: "",
+        monthSpentByCategory: {},
+        budgets: {},
+      });
+      setFilterCategory("");
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
-    const res = await fetch(`${API_URL}/api/expenses`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    });
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Failed to add expense.");
-      return;
+
+    try {
+      const createdExpense = await apiFetch("/api/expenses", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
+
+      if (pendingAttachment && createdExpense?.id) {
+        const formData = new FormData();
+        formData.append("file", pendingAttachment);
+
+        setUploading(true);
+        const uploadResponse = await fetch(`${API_URL}/api/expenses/${createdExpense.id}/attachment`, {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: formData,
+        });
+
+        const uploadData = await uploadResponse.json().catch(() => ({}));
+        if (!uploadResponse.ok) {
+          throw new Error(uploadData.error || "Attachment upload failed.");
+        }
+      }
+
+      setPendingAttachment(null);
+      setForm({
+        amount: "",
+        category: "",
+        description: "",
+        vendor: "",
+        date: new Date().toISOString().slice(0, 10),
+      });
+      loadAll();
+    } catch (loadError) {
+      setError(loadError.message || "Failed to add expense.");
+    } finally {
+      setUploading(false);
     }
-    setForm({
-      amount: "",
-      category: "",
-      description: "",
-      vendor: "",
-      date: new Date().toISOString().slice(0, 10),
-    });
-    loadAll();
   }
 
   async function handleDelete(id) {
-    await fetch(`${API_URL}/api/expenses/${id}`, { method: "DELETE" });
+    await apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
     loadAll();
+  }
+
+  async function handleSetBudget(category) {
+    const value = budgetDrafts[category];
+    if (value === undefined || value === "") return;
+
+    await apiFetch(`/api/budgets/${encodeURIComponent(category)}`, {
+      method: "PUT",
+      body: JSON.stringify({ monthly_limit: Number(value) }),
+    });
+
+    setBudgetDrafts({ ...budgetDrafts, [category]: "" });
+    loadAll();
+  }
+
+  async function handleClearBudget(category) {
+    await apiFetch(`/api/budgets/${encodeURIComponent(category)}`, { method: "DELETE" });
+    loadAll();
+  }
+
+  if (!token || isLoadingUser) {
+    return (
+      <div className="page auth-page">
+        <div className="auth-card">
+          <h1>Owo Track</h1>
+          <p className="subtitle">Track spending with your own account</p>
+
+          <div className="auth-toggle">
+            <button
+              type="button"
+              className={authMode === "login" ? "active" : ""}
+              onClick={() => setAuthMode("login")}
+            >
+              Login
+            </button>
+            <button
+              type="button"
+              className={authMode === "register" ? "active" : ""}
+              onClick={() => setAuthMode("register")}
+            >
+              Register
+            </button>
+          </div>
+
+          <form onSubmit={handleAuthSubmit} className="auth-form">
+            {authMode === "register" && (
+              <label>
+                Full name
+                <input
+                  type="text"
+                  value={authForm.name}
+                  onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+                  required
+                />
+              </label>
+            )}
+
+            <label>
+              Email
+              <input
+                type="email"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                required
+              />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                required
+                minLength={6}
+              />
+            </label>
+
+            {authError && <p className="error">{authError}</p>}
+
+            <button type="submit">{authMode === "login" ? "Log in" : "Create account"}</button>
+          </form>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="page">
-      <header>
-        <h1>Owo Track</h1>
-        <p className="subtitle">Expense tracking for small &amp; medium scale enterprises</p>
+      <header className="topbar">
+        <div>
+          <h1>Owo Track</h1>
+          <p className="subtitle">Welcome, {user?.name || "there"}</p>
+        </div>
+        <button className="logout-button" onClick={handleLogout}>Log out</button>
       </header>
 
       <section className="summary">
@@ -80,6 +340,58 @@ export default function App() {
               <span className="value">₦{amt.toLocaleString()}</span>
             </div>
           ))}
+      </section>
+
+      <section className="budgets-section">
+        <h2>Monthly Budgets {summary.month && <span className="month-label">({summary.month})</span>}</h2>
+        <div className="budget-grid">
+          {categories.map((cat) => {
+            const spent = summary.monthSpentByCategory?.[cat] || 0;
+            const limit = summary.budgets?.[cat];
+            const hasLimit = limit !== undefined;
+            const pct = hasLimit && limit > 0 ? Math.min((spent / limit) * 100, 100) : 0;
+            const overBudget = hasLimit && spent > limit;
+
+            return (
+              <div className="budget-card" key={cat}>
+                <div className="budget-card-header">
+                  <span>{cat}</span>
+                  {hasLimit && (
+                    <button className="clear-budget" onClick={() => handleClearBudget(cat)}>
+                      clear
+                    </button>
+                  )}
+                </div>
+
+                {hasLimit ? (
+                  <>
+                    <div className="budget-bar">
+                      <div
+                        className={`budget-bar-fill ${overBudget ? "over" : ""}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className={`budget-status ${overBudget ? "over" : ""}`}>
+                      ₦{spent.toLocaleString()} / ₦{limit.toLocaleString()}
+                      {overBudget && " — over budget"}
+                    </div>
+                  </>
+                ) : (
+                  <div className="budget-set">
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="Set limit (₦)"
+                      value={budgetDrafts[cat] || ""}
+                      onChange={(e) => setBudgetDrafts({ ...budgetDrafts, [cat]: e.target.value })}
+                    />
+                    <button onClick={() => handleSetBudget(cat)}>Set</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       <section className="form-section">
@@ -139,8 +451,18 @@ export default function App() {
               />
             </label>
           </div>
+          <div className="form-row">
+            <label>
+              Attachment
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,application/pdf"
+                onChange={(e) => setPendingAttachment(e.target.files?.[0] || null)}
+              />
+            </label>
+          </div>
           {error && <p className="error">{error}</p>}
-          <button type="submit">Add Expense</button>
+          <button type="submit" disabled={uploading}>{uploading ? "Uploading..." : "Add Expense"}</button>
         </form>
       </section>
 
@@ -177,7 +499,14 @@ export default function App() {
                 <td>{e.category}</td>
                 <td>{e.vendor}</td>
                 <td>{e.description}</td>
-                <td>₦{e.amount.toLocaleString()}</td>
+                <td>
+                  <div className="amount-cell">
+                    <span>₦{e.amount.toLocaleString()}</span>
+                    {e.attachment_url && (
+                      <a href={`${API_URL}${e.attachment_url}`} target="_blank" rel="noreferrer">View file</a>
+                    )}
+                  </div>
+                </td>
                 <td>
                   <button className="delete" onClick={() => handleDelete(e.id)}>✕</button>
                 </td>

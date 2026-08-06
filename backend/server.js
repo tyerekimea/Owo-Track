@@ -1,7 +1,15 @@
 const express = require("express");
 const cors = require("cors");
+const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
 const db = require("./db");
+const { UPLOAD_DIR, buildAttachmentName } = require("./storage");
+const {
+  hashPassword,
+  verifyPassword,
+  createSessionToken,
+  getUserForSession,
+} = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -18,30 +26,170 @@ const CATEGORIES = [
 ];
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use("/uploads", express.static(UPLOAD_DIR));
 
-// Get category list
-app.get("/api/categories", (req, res) => {
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+    filename: (req, file, cb) => cb(null, buildAttachmentName(file.originalname, req.userId || "user")),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf", "text/plain"];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error("Unsupported file type. Please upload a JPG, PNG, WEBP, PDF, or text file."));
+  },
+});
+
+function authenticate(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+
+  if (!token) {
+    return res.status(401).json({ error: "Authentication required." });
+  }
+
+  const session = db.prepare("SELECT * FROM sessions WHERE token = ?").get(token);
+  if (!session) {
+    return res.status(401).json({ error: "Invalid session." });
+  }
+
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id);
+  if (!user) {
+    return res.status(401).json({ error: "User not found." });
+  }
+
+  req.user = user;
+  req.userId = user.id;
+  req.session = session;
+  next();
+}
+
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  const { name, email, password } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!name || !String(name).trim()) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return res.status(400).json({ error: "A valid email is required." });
+  }
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+  }
+
+  const existingUser = db.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail);
+  if (existingUser) {
+    return res.status(409).json({ error: "An account with this email already exists." });
+  }
+
+  const userId = uuidv4();
+  const { hash, salt } = hashPassword(String(password));
+  const createdAt = new Date().toISOString();
+
+  db.prepare(
+    `INSERT INTO users (id, name, email, password_hash, password_salt, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(userId, String(name).trim(), normalizedEmail, hash, salt, createdAt);
+
+  const token = createSessionToken();
+  db.prepare(
+    `INSERT INTO sessions (id, user_id, token, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(uuidv4(), userId, token, createdAt);
+
+  res.status(201).json({
+    token,
+    user: {
+      id: userId,
+      name: String(name).trim(),
+      email: normalizedEmail,
+    },
+  });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  const { email, password } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!normalizedEmail || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(normalizedEmail);
+  if (!user) {
+    return res.status(401).json({ error: "Invalid email or password." });
+  }
+
+  const isValid = verifyPassword(String(password), user.password_salt, user.password_hash);
+  if (!isValid) {
+    return res.status(401).json({ error: "Invalid email or password." });
+  }
+
+  const token = createSessionToken();
+  const createdAt = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO sessions (id, user_id, token, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(uuidv4(), user.id, token, createdAt);
+
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    },
+  });
+});
+
+app.get("/api/auth/me", authenticate, (req, res) => {
+  res.json({
+    user: {
+      id: req.user.id,
+      name: req.user.name,
+      email: req.user.email,
+    },
+  });
+});
+
+app.post("/api/auth/logout", authenticate, (req, res) => {
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(req.session.token);
+  res.status(204).send();
+});
+
+app.get("/api/categories", authenticate, (req, res) => {
   res.json(CATEGORIES);
 });
 
-// Get all expenses (optional ?category= filter), newest first
-app.get("/api/expenses", (req, res) => {
+app.get("/api/expenses", authenticate, (req, res) => {
   const { category } = req.query;
 
   let rows;
   if (category) {
     rows = db
-      .prepare("SELECT * FROM expenses WHERE category = ? ORDER BY date DESC")
-      .all(category);
+      .prepare("SELECT * FROM expenses WHERE user_id = ? AND category = ? ORDER BY date DESC")
+      .all(req.userId, category);
   } else {
-    rows = db.prepare("SELECT * FROM expenses ORDER BY date DESC").all();
+    rows = db.prepare("SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC").all(req.userId);
   }
   res.json(rows);
 });
 
-// Add an expense
-app.post("/api/expenses", (req, res) => {
+app.post("/api/expenses", authenticate, (req, res) => {
   const { amount, category, description, vendor, date } = req.body;
 
   if (!amount || isNaN(amount) || Number(amount) <= 0) {
@@ -53,47 +201,144 @@ app.post("/api/expenses", (req, res) => {
 
   const expense = {
     id: uuidv4(),
+    user_id: req.userId,
     amount: Number(amount),
     category,
     description: description || "",
     vendor: vendor || "",
     date: date || new Date().toISOString().slice(0, 10),
+    attachment_name: "",
+    attachment_url: "",
   };
 
   db.prepare(
-    `INSERT INTO expenses (id, amount, category, description, vendor, date)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(expense.id, expense.amount, expense.category, expense.description, expense.vendor, expense.date);
+    `INSERT INTO expenses (id, user_id, amount, category, description, vendor, date, attachment_name, attachment_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    expense.id,
+    expense.user_id,
+    expense.amount,
+    expense.category,
+    expense.description,
+    expense.vendor,
+    expense.date,
+    expense.attachment_name,
+    expense.attachment_url,
+  );
 
   res.status(201).json(expense);
 });
 
-// Delete an expense
-app.delete("/api/expenses/:id", (req, res) => {
-  const result = db.prepare("DELETE FROM expenses WHERE id = ?").run(req.params.id);
+app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (req, res) => {
+  const expense = db
+    .prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?")
+    .get(req.params.id, req.userId);
+
+  if (!expense) {
+    return res.status(404).json({ error: "Expense not found." });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ error: "A file is required." });
+  }
+
+  const uploadedUrl = `/uploads/${req.file.filename}`;
+
+  db.prepare(
+    "UPDATE expenses SET attachment_name = ?, attachment_url = ? WHERE id = ? AND user_id = ?"
+  ).run(req.file.filename, uploadedUrl, req.params.id, req.userId);
+
+  res.json({
+    attachment: {
+      name: req.file.filename,
+      url: uploadedUrl,
+    },
+  });
+});
+
+app.delete("/api/expenses/:id", authenticate, (req, res) => {
+  const result = db
+    .prepare("DELETE FROM expenses WHERE id = ? AND user_id = ?")
+    .run(req.params.id, req.userId);
+
   if (result.changes === 0) {
     return res.status(404).json({ error: "Expense not found." });
   }
+
   res.status(204).send();
 });
 
-// Summary: totals by category + grand total
-app.get("/api/summary", (req, res) => {
+app.get("/api/budgets", authenticate, (req, res) => {
+  const rows = db.prepare("SELECT category, monthly_limit FROM budgets WHERE user_id = ?").all(req.userId);
+  const budgets = {};
+  for (const row of rows) budgets[row.category] = row.monthly_limit;
+  res.json(budgets);
+});
+
+app.put("/api/budgets/:category", authenticate, (req, res) => {
+  const { category } = req.params;
+  const { monthly_limit } = req.body;
+
+  if (!CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: "Unknown category." });
+  }
+  if (monthly_limit === undefined || isNaN(monthly_limit) || Number(monthly_limit) < 0) {
+    return res.status(400).json({ error: "A valid non-negative monthly_limit is required." });
+  }
+
+  db.prepare(
+    `INSERT INTO budgets (user_id, category, monthly_limit)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id, category) DO UPDATE SET monthly_limit = excluded.monthly_limit`
+  ).run(req.userId, category, Number(monthly_limit));
+
+  res.json({ category, monthly_limit: Number(monthly_limit) });
+});
+
+app.delete("/api/budgets/:category", authenticate, (req, res) => {
+  db.prepare("DELETE FROM budgets WHERE user_id = ? AND category = ?").run(req.userId, req.params.category);
+  res.status(204).send();
+});
+
+app.get("/api/summary", authenticate, (req, res) => {
   const totalsByCategory = {};
   for (const cat of CATEGORIES) totalsByCategory[cat] = 0;
 
   const rows = db
-    .prepare("SELECT category, SUM(amount) as total FROM expenses GROUP BY category")
-    .all();
+    .prepare("SELECT category, SUM(amount) as total FROM expenses WHERE user_id = ? GROUP BY category")
+    .all(req.userId);
+
   for (const row of rows) {
     totalsByCategory[row.category] = row.total;
   }
 
   const { total: grandTotal, count } = db
-    .prepare("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses")
-    .get();
+    .prepare("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = ?")
+    .get(req.userId);
 
-  res.json({ totalsByCategory, grandTotal, count });
+  const monthPrefix = new Date().toISOString().slice(0, 7);
+  const monthRows = db
+    .prepare(
+      "SELECT category, SUM(amount) as total FROM expenses WHERE user_id = ? AND date LIKE ? GROUP BY category"
+    )
+    .all(req.userId, `${monthPrefix}%`);
+
+  const monthSpentByCategory = {};
+  for (const cat of CATEGORIES) monthSpentByCategory[cat] = 0;
+  for (const row of monthRows) monthSpentByCategory[row.category] = row.total;
+
+  const budgetRows = db.prepare("SELECT category, monthly_limit FROM budgets WHERE user_id = ?").all(req.userId);
+  const budgets = {};
+  for (const row of budgetRows) budgets[row.category] = row.monthly_limit;
+
+  res.json({
+    totalsByCategory,
+    grandTotal,
+    count,
+    month: monthPrefix,
+    monthSpentByCategory,
+    budgets,
+  });
 });
 
 app.listen(PORT, () => {
