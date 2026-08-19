@@ -24,8 +24,19 @@ function verifyPassword(password, salt, hash) {
   return crypto.timingSafeEqual(expected, actual);
 }
 
+const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
 function createSessionToken() {
   return crypto.randomBytes(32).toString("hex");
+}
+
+function getSessionExpiry(fromDate = new Date()) {
+  return new Date(fromDate.getTime() + SESSION_DURATION_MS).toISOString();
+}
+
+function isSessionExpired(session) {
+  if (!session.expires_at) return false; // safety net for any row missed by migration
+  return new Date(session.expires_at).getTime() < Date.now();
 }
 
 function getUserForSession({ user, session }) {
@@ -41,4 +52,6 @@ module.exports = {
   verifyPassword,
   createSessionToken,
   getUserForSession,
+  getSessionExpiry,
+  isSessionExpired,
 };

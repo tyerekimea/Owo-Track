@@ -6,11 +6,14 @@ const fs = require("node:fs");
 const { v4: uuidv4 } = require("uuid");
 const db = require("./db");
 const { UPLOAD_DIR, buildAttachmentName } = require("./storage");
+const { createRateLimiter } = require("./rateLimit");
 const {
   hashPassword,
   verifyPassword,
   createSessionToken,
   getUserForSession,
+  getSessionExpiry,
+  isSessionExpired,
 } = require("./auth");
 
 const app = express();
@@ -27,8 +30,45 @@ const CATEGORIES = [
   "Miscellaneous",
 ];
 
-app.use(cors());
+// Allowed frontend origin(s). Defaults to the Vite dev server so local
+// development keeps working unchanged; set CORS_ORIGIN (comma-separated
+// for more than one) to the real frontend URL(s) in production.
+const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow requests with no Origin header (server-to-server calls,
+      // curl, some mobile/native webviews) alongside the configured list.
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("Not allowed by CORS"));
+    },
+  })
+);
 app.use(express.json({ limit: "10mb" }));
+
+// Trust the platform's proxy (Codespaces/most hosts sit behind one) so
+// req.ip reflects the real client rather than the proxy's address.
+app.set("trust proxy", true);
+
+const loginLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  scope: "login",
+  message: "Too many login attempts. Please wait a few minutes and try again.",
+});
+
+const registerLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  scope: "register",
+  message: "Too many accounts created from this connection. Please try again later.",
+});
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -59,6 +99,11 @@ function authenticate(req, res, next) {
     return res.status(401).json({ error: "Invalid session." });
   }
 
+  if (isSessionExpired(session)) {
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+    return res.status(401).json({ error: "Session expired. Please log in again." });
+  }
+
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(session.user_id);
   if (!user) {
     return res.status(401).json({ error: "User not found." });
@@ -78,7 +123,7 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", registerLimiter, (req, res) => {
   const { name, email, password } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
 
@@ -108,9 +153,9 @@ app.post("/api/auth/register", (req, res) => {
 
   const token = createSessionToken();
   db.prepare(
-    `INSERT INTO sessions (id, user_id, token, created_at)
-     VALUES (?, ?, ?, ?)`
-  ).run(uuidv4(), userId, token, createdAt);
+    `INSERT INTO sessions (id, user_id, token, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(uuidv4(), userId, token, createdAt, getSessionExpiry());
 
   res.status(201).json({
     token,
@@ -122,7 +167,7 @@ app.post("/api/auth/register", (req, res) => {
   });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", loginLimiter, (req, res) => {
   const { email, password } = req.body || {};
   const normalizedEmail = normalizeEmail(email);
 
@@ -143,9 +188,9 @@ app.post("/api/auth/login", (req, res) => {
   const token = createSessionToken();
   const createdAt = new Date().toISOString();
   db.prepare(
-    `INSERT INTO sessions (id, user_id, token, created_at)
-     VALUES (?, ?, ?, ?)`
-  ).run(uuidv4(), user.id, token, createdAt);
+    `INSERT INTO sessions (id, user_id, token, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(uuidv4(), user.id, token, createdAt, getSessionExpiry());
 
   res.json({
     token,

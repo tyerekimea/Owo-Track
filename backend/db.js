@@ -65,4 +65,14 @@ if (!budgetColumns.some((column) => column.name === "user_id")) {
   db.exec("UPDATE budgets SET user_id = '' WHERE user_id IS NULL");
 }
 
+const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all();
+if (!sessionColumns.some((column) => column.name === "expires_at")) {
+  db.exec("ALTER TABLE sessions ADD COLUMN expires_at TEXT");
+  // Existing sessions predate expiry tracking — give them a fresh 30-day
+  // window from now rather than logging every current user out immediately.
+  db.exec(
+    `UPDATE sessions SET expires_at = datetime('now', '+30 days') WHERE expires_at IS NULL`
+  );
+}
+
 module.exports = db;
