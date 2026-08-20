@@ -1,22 +1,53 @@
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Ledger palette — deep moss olive + rich cerulean sky, warm paper neutrals */
+  --olive: #445a20;
+  --olive-dark: #2c3b14;
+  --olive-tint: #f3f1e3;
+  --sky: #0e86be;
+  --sky-dark: #0a6690;
+  --sky-tint: #e4f4fb;
+  --bg: var(--olive-tint);
+  --card: #fffef8;
+  --border: #dad9be;
+  --text: #232c15;
+  --text-muted: #66714a;
+  --danger: #b23a2e;
+  --danger-tint: #f7e9e6;
+
+  --font-display: "Fraunces", "Iowan Old Style", Georgia, serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+
+  font-family: var(--font-body);
   color-scheme: light;
-  --brand: #0f766e;
-  --brand-dark: #0b5750;
-  --bg: #f7f7f5;
-  --card: #ffffff;
-  --border: #e2e2e0;
-  --text: #1f2937;
-  --text-muted: #6b7280;
-  --danger: #dc2626;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: var(--bg);
   color: var(--text);
+  /* Faint ruled-ledger-paper texture across the whole app */
+  background-color: var(--bg);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(68, 90, 32, 0.05),
+    rgba(68, 90, 32, 0.05) 1px,
+    transparent 1px,
+    transparent 2rem
+  );
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .auth-card, .page > * { animation: rise 0.35s ease both; }
+  .page > *:nth-child(2) { animation-delay: 0.04s; }
+  .page > *:nth-child(3) { animation-delay: 0.08s; }
+  .page > *:nth-child(4) { animation-delay: 0.12s; }
+  .page > *:nth-child(5) { animation-delay: 0.16s; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .page {
@@ -25,20 +56,28 @@ body {
   padding: 2rem 1.25rem 4rem;
 }
 
-header h1 {
+header h1,
+.auth-card h1 {
   margin: 0;
-  font-size: 1.75rem;
+  font-family: var(--font-display);
+  font-weight: 680;
+  font-size: 2rem;
+  letter-spacing: -0.01em;
+  color: var(--olive-dark);
 }
 .topbar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
   gap: 1rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.75rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 2px solid var(--sky);
 }
 .subtitle {
-  margin: 0.25rem 0 1.5rem;
+  margin: 0.3rem 0 0;
   color: var(--text-muted);
+  font-size: 0.92rem;
 }
 .auth-page {
   min-height: 100vh;
@@ -50,136 +89,201 @@ header h1 {
   width: min(100%, 420px);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 2rem;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  border-radius: 18px;
+  padding: 2.25rem 2rem;
+  box-shadow: 0 16px 40px rgba(44, 59, 20, 0.12);
+  position: relative;
+  overflow: hidden;
 }
+.auth-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: linear-gradient(90deg, var(--olive), var(--sky));
+}
+.auth-card .subtitle { margin-bottom: 0.5rem; }
 .auth-toggle {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
-  margin: 1rem 0;
+  margin: 1.25rem 0;
 }
 .auth-toggle button {
-  background: #f3f4f6;
+  background: var(--sky-tint);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 999px;
   padding: 0.6rem;
   cursor: pointer;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
+.auth-toggle button:hover { transform: translateY(-1px); }
 .auth-toggle button.active {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: linear-gradient(135deg, var(--olive), var(--olive-dark));
+  border-color: var(--olive-dark);
   color: #fff;
 }
 .auth-form {
   display: flex;
   flex-direction: column;
-  gap: 0.9rem;
+  gap: 1rem;
 }
 .auth-form label {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.4rem;
   color: var(--text-muted);
   font-size: 0.85rem;
+  font-weight: 500;
 }
 .logout-button {
   background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--olive);
+  border-radius: 999px;
+  padding: 0.5rem 1rem;
   cursor: pointer;
+  color: var(--olive-dark);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.logout-button:hover {
+  background: var(--olive);
+  color: #fff;
 }
 
-section {
-  margin-bottom: 2rem;
-}
+section { margin-bottom: 2.25rem; }
 
 h2 {
-  font-size: 1.1rem;
-  margin: 0 0 0.75rem;
+  font-family: var(--font-display);
+  font-weight: 620;
+  font-size: 1.2rem;
+  margin: 0 0 0.9rem;
+  color: var(--olive-dark);
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+/* Signature: a sky-blue "ledger tab" marker before every section heading,
+   echoing the little index tabs on a bank passbook. */
+h2::before {
+  content: "";
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 3px;
+  background: var(--sky);
+  box-shadow: 2px 2px 0 rgba(14, 134, 190, 0.25);
+  flex-shrink: 0;
 }
 
 .summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.85rem;
 }
 .summary-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.75rem 1rem;
-  min-width: 120px;
+  border-radius: 12px;
+  padding: 0.85rem 1.1rem;
+  min-width: 130px;
   display: flex;
   flex-direction: column;
+  gap: 0.15rem;
 }
 .summary-card.total {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: linear-gradient(135deg, var(--olive) 0%, var(--olive-dark) 45%, var(--sky-dark) 100%);
+  border-color: transparent;
   color: #fff;
+  box-shadow: 0 10px 24px rgba(44, 59, 20, 0.25);
 }
 .summary-card .label {
-  font-size: 0.75rem;
-  opacity: 0.8;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
 }
 .summary-card .value {
-  font-size: 1.1rem;
+  font-family: var(--font-mono);
+  font-size: 1.2rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-.form-section {
+.form-section, .list-section {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.25rem;
+  border-radius: 14px;
+  padding: 1.4rem;
 }
 .form-row {
   display: flex;
   gap: 1rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.85rem;
   flex-wrap: wrap;
 }
 .form-row label {
   display: flex;
   flex-direction: column;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 500;
   color: var(--text-muted);
-  gap: 0.25rem;
+  gap: 0.3rem;
   flex: 1;
   min-width: 150px;
 }
-.form-row label.grow {
-  flex: 2;
-}
+.form-row label.grow { flex: 2; }
+
 input, select {
-  padding: 0.5rem 0.6rem;
+  padding: 0.55rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 8px;
+  font-family: var(--font-body);
   font-size: 0.95rem;
   color: var(--text);
   background: #fff;
   width: 100%;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--sky);
+  box-shadow: 0 0 0 3px var(--sky-tint);
+}
+
 button[type="submit"] {
-  background: var(--brand);
+  background: linear-gradient(135deg, var(--sky), var(--sky-dark));
   color: #fff;
   border: none;
-  padding: 0.6rem 1.25rem;
-  border-radius: 8px;
+  padding: 0.65rem 1.5rem;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: 0.95rem;
   cursor: pointer;
+  box-shadow: 0 6px 16px rgba(10, 102, 144, 0.25);
+  transition: filter 0.15s ease, transform 0.1s ease;
 }
-button[type="submit"]:hover {
-  background: var(--brand-dark);
-}
+button[type="submit"]:hover { filter: brightness(1.06); transform: translateY(-1px); }
 button[type="submit"]:disabled {
-  opacity: 0.7;
+  opacity: 0.65;
   cursor: wait;
+  transform: none;
 }
 .error {
   color: var(--danger);
+  background: var(--danger-tint);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
 }
 
@@ -189,91 +293,103 @@ button[type="submit"]:disabled {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
+  margin-bottom: 0.9rem;
 }
+.list-header h2 { margin-bottom: 0; }
+.list-header select { width: auto; }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
 }
 th, td {
   text-align: left;
-  padding: 0.6rem 0.75rem;
+  padding: 0.65rem 0.75rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.9rem;
 }
 th {
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 0.8rem;
+  color: var(--olive-dark);
+  font-weight: 700;
+  font-size: 0.72rem;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 2px solid var(--olive);
 }
+tbody tr:hover { background: var(--sky-tint); }
+tbody tr:last-child td { border-bottom: none; }
 .empty {
   text-align: center;
   color: var(--text-muted);
-  padding: 1.5rem;
+  padding: 1.75rem;
 }
 button.delete {
   background: none;
   border: none;
   color: var(--danger);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  border-radius: 6px;
+  padding: 0.2rem 0.4rem;
+  transition: background 0.15s ease;
 }
+button.delete:hover { background: var(--danger-tint); }
 
 .month-label {
   font-weight: 400;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  font-family: var(--font-body);
 }
 
 .budget-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 0.85rem;
 }
 .budget-card {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.75rem;
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
 }
 .budget-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 0.9rem;
-  font-weight: 600;
-  margin-bottom: 0.5rem;
+  font-weight: 700;
+  color: var(--olive-dark);
+  margin-bottom: 0.6rem;
 }
 .clear-budget {
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 500;
   cursor: pointer;
   text-decoration: underline;
 }
 .budget-bar {
-  height: 8px;
-  border-radius: 4px;
-  background: #eee;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--sky-tint);
   overflow: hidden;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.4rem;
 }
 .budget-bar-fill {
   height: 100%;
-  background: var(--brand);
-  transition: width 0.2s ease;
+  background: linear-gradient(90deg, var(--olive), var(--sky));
+  transition: width 0.25s ease;
 }
 .budget-bar-fill.over {
   background: var(--danger);
 }
 .budget-status {
   font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
 .budget-status.over {
@@ -284,35 +400,38 @@ button.delete {
   display: flex;
   gap: 0.4rem;
 }
-.budget-set input {
-  flex: 1;
-  min-width: 0;
-}
+.budget-set input { flex: 1; min-width: 0; }
 .budget-set button {
-  background: var(--brand);
+  background: var(--olive);
   color: #fff;
   border: none;
   border-radius: 8px;
-  padding: 0 0.7rem;
+  padding: 0 0.85rem;
   cursor: pointer;
+  font-weight: 600;
   font-size: 0.85rem;
+  transition: background 0.15s ease;
 }
+.budget-set button:hover { background: var(--olive-dark); }
+
 .amount-cell {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 .amount-cell a,
 .view-attachment {
-  color: var(--brand);
+  font-family: var(--font-body);
+  color: var(--sky-dark);
   text-decoration: none;
   font-size: 0.75rem;
+  font-weight: 500;
   background: none;
   border: none;
   padding: 0;
   cursor: pointer;
   text-align: left;
 }
-.view-attachment:hover {
-  text-decoration: underline;
-}
+.view-attachment:hover { text-decoration: underline; }

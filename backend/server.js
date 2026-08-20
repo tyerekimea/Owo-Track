@@ -1,3 +1,5 @@
+import { authorize } from './authorize.js';
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -18,6 +20,7 @@ const {
 } = require("./auth");
 
 const app = express();
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
 const PORT = process.env.PORT || 4000;
 
 const CATEGORIES = [
