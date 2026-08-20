@@ -16,9 +16,9 @@ const {
   isSessionExpired,
   SESSION_DURATION_MS,
 } = require("./auth");
+const { authorize, canAccessExpense, canApproveExpense } = require("./authorize");
 
 const app = express();
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
 const PORT = process.env.PORT || 4000;
 
 const CATEGORIES = [
@@ -156,6 +156,48 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
+function publicUser(user) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    organization_id: user.organization_id,
+    team_id: user.team_id,
+    role: user.role || "employee",
+  };
+}
+
+function expenseScope(req) {
+  if (req.user.role === "admin") {
+    return { clause: "organization_id = ?", params: [req.user.organization_id] };
+  }
+  if (req.user.role === "manager") {
+    return {
+      clause: "organization_id = ? AND team_id = ?",
+      params: [req.user.organization_id, req.user.team_id],
+    };
+  }
+  return { clause: "user_id = ?", params: [req.userId] };
+}
+
+function recordApproval(expenseId, organizationId, actorId, action, fromStatus, toStatus, comment = "") {
+  db.prepare(
+    `INSERT INTO approval_history
+      (id, expense_id, organization_id, actor_id, action, from_status, to_status, comment, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    uuidv4(),
+    expenseId,
+    organizationId,
+    actorId,
+    action,
+    fromStatus,
+    toStatus,
+    comment,
+    new Date().toISOString(),
+  );
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ ok: true });
 });
@@ -183,10 +225,20 @@ app.post("/api/auth/register", registerLimiter, (req, res) => {
   const { hash, salt } = hashPassword(String(password));
   const createdAt = new Date().toISOString();
 
+  const organizationId = uuidv4();
+  const teamId = uuidv4();
+  db.prepare("INSERT INTO organizations (id, name, created_at) VALUES (?, ?, ?)").run(
+    organizationId,
+    `${String(name).trim()}'s organization`,
+    createdAt,
+  );
   db.prepare(
-    `INSERT INTO users (id, name, email, password_hash, password_salt, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(userId, String(name).trim(), normalizedEmail, hash, salt, createdAt);
+    "INSERT INTO teams (id, organization_id, name, created_at) VALUES (?, ?, ?, ?)"
+  ).run(teamId, organizationId, "General", createdAt);
+  db.prepare(
+    `INSERT INTO users (id, name, email, password_hash, password_salt, organization_id, team_id, role, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'admin', ?)`
+  ).run(userId, String(name).trim(), normalizedEmail, hash, salt, organizationId, teamId, createdAt);
 
   const token = createSessionToken();
   db.prepare(
@@ -197,11 +249,7 @@ app.post("/api/auth/register", registerLimiter, (req, res) => {
   setSessionCookie(res, token);
 
   res.status(201).json({
-    user: {
-      id: userId,
-      name: String(name).trim(),
-      email: normalizedEmail,
-    },
+    user: publicUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId)),
   });
 });
 
@@ -234,20 +282,14 @@ app.post("/api/auth/login", loginLimiter, (req, res) => {
 
   res.json({
     user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
+      ...publicUser(user),
     },
   });
 });
 
 app.get("/api/auth/me", authenticate, (req, res) => {
   res.json({
-    user: {
-      id: req.user.id,
-      name: req.user.name,
-      email: req.user.email,
-    },
+    user: publicUser(req.user),
   });
 });
 
@@ -259,6 +301,117 @@ app.post("/api/auth/logout", authenticate, (req, res) => {
 
 app.get("/api/categories", authenticate, (req, res) => {
   res.json(CATEGORIES);
+});
+
+app.get("/api/teams", authenticate, authorize("manager"), (req, res) => {
+  const rows = db
+    .prepare("SELECT id, organization_id, name, created_at FROM teams WHERE organization_id = ? ORDER BY name")
+    .all(req.user.organization_id);
+  res.json(rows);
+});
+
+app.post("/api/teams", authenticate, authorize("admin"), (req, res) => {
+  const name = String(req.body?.name || "").trim();
+  if (!name || name.length > 100) {
+    return res.status(400).json({ error: "A team name between 1 and 100 characters is required." });
+  }
+  try {
+    const team = { id: uuidv4(), organization_id: req.user.organization_id, name, created_at: new Date().toISOString() };
+    db.prepare("INSERT INTO teams (id, organization_id, name, created_at) VALUES (?, ?, ?, ?)").run(
+      team.id, team.organization_id, team.name, team.created_at,
+    );
+    return res.status(201).json(team);
+  } catch (error) {
+    if (String(error.message).includes("UNIQUE")) {
+      return res.status(409).json({ error: "A team with that name already exists." });
+    }
+    throw error;
+  }
+});
+
+app.patch("/api/users/:id/team", authenticate, authorize("admin"), (req, res) => {
+  const { team_id: teamId } = req.body || {};
+  const team = db.prepare("SELECT * FROM teams WHERE id = ? AND organization_id = ?").get(teamId, req.user.organization_id);
+  if (!team) return res.status(400).json({ error: "A valid team in your organization is required." });
+
+  const target = db.prepare("SELECT * FROM users WHERE id = ? AND organization_id = ?").get(
+    req.params.id,
+    req.user.organization_id,
+  );
+  if (!target) return res.status(404).json({ error: "User not found." });
+
+  db.prepare("UPDATE users SET team_id = ? WHERE id = ? AND organization_id = ?").run(
+    teamId, target.id, req.user.organization_id,
+  );
+  res.json(publicUser(db.prepare("SELECT * FROM users WHERE id = ?").get(target.id)));
+});
+
+app.get("/api/users", authenticate, authorize("admin"), (req, res) => {
+  const users = db
+    .prepare("SELECT id, name, email, organization_id, team_id, role, created_at FROM users WHERE organization_id = ? ORDER BY name")
+    .all(req.user.organization_id);
+  res.json(users);
+});
+
+app.post("/api/users", authenticate, authorize("admin"), (req, res) => {
+  const { name, email, password, role = "employee", team_id: teamId } = req.body || {};
+  const normalizedEmail = normalizeEmail(email);
+  const cleanName = String(name || "").trim();
+  if (!cleanName || cleanName.length > 120) return res.status(400).json({ error: "A valid name is required." });
+  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return res.status(400).json({ error: "A valid email is required." });
+  }
+  if (!password || String(password).length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+  }
+  if (!["employee", "manager"].includes(role)) {
+    return res.status(400).json({ error: "New users may only be employees or managers." });
+  }
+  const team = db.prepare("SELECT id FROM teams WHERE id = ? AND organization_id = ?").get(
+    teamId,
+    req.user.organization_id,
+  );
+  if (!team) return res.status(400).json({ error: "A valid team in your organization is required." });
+  if (db.prepare("SELECT id FROM users WHERE email = ?").get(normalizedEmail)) {
+    return res.status(409).json({ error: "An account with this email already exists." });
+  }
+
+  const userId = uuidv4();
+  const { hash, salt } = hashPassword(String(password));
+  db.prepare(
+    `INSERT INTO users (id, name, email, password_hash, password_salt, organization_id, team_id, role, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    userId,
+    cleanName,
+    normalizedEmail,
+    hash,
+    salt,
+    req.user.organization_id,
+    teamId,
+    role,
+    new Date().toISOString(),
+  );
+  res.status(201).json(publicUser(db.prepare("SELECT * FROM users WHERE id = ?").get(userId)));
+});
+
+app.patch("/api/users/:id/role", authenticate, authorize("admin"), (req, res) => {
+  const { role } = req.body || {};
+  if (!["employee", "manager", "admin"].includes(role)) {
+    return res.status(400).json({ error: "Role must be employee, manager, or admin." });
+  }
+  if (req.params.id === req.userId && role !== "admin") {
+    return res.status(400).json({ error: "You cannot remove your own administrator role." });
+  }
+  const target = db.prepare("SELECT * FROM users WHERE id = ? AND organization_id = ?").get(
+    req.params.id,
+    req.user.organization_id,
+  );
+  if (!target) return res.status(404).json({ error: "User not found." });
+  db.prepare("UPDATE users SET role = ? WHERE id = ? AND organization_id = ?").run(
+    role, target.id, req.user.organization_id,
+  );
+  res.json(publicUser(db.prepare("SELECT * FROM users WHERE id = ?").get(target.id)));
 });
 
 const DEFAULT_EXPENSE_LIMIT = 50;
@@ -274,8 +427,9 @@ app.get("/api/expenses", authenticate, (req, res) => {
   let offset = parseInt(req.query.offset, 10);
   if (!Number.isFinite(offset) || offset < 0) offset = 0;
 
-  const whereClause = category ? "WHERE user_id = ? AND category = ?" : "WHERE user_id = ?";
-  const params = category ? [req.userId, category] : [req.userId];
+  const scope = expenseScope(req);
+  const whereClause = category ? `WHERE ${scope.clause} AND category = ?` : `WHERE ${scope.clause}`;
+  const params = category ? [...scope.params, category] : scope.params;
 
   const { count: total } = db
     .prepare(`SELECT COUNT(*) as count FROM expenses ${whereClause}`)
@@ -304,26 +458,51 @@ app.post("/api/expenses", authenticate, (req, res) => {
   const expense = {
     id: uuidv4(),
     user_id: req.userId,
+    organization_id: req.user.organization_id,
+    team_id: req.user.team_id,
+    created_by: req.userId,
     amount: Number(amount),
     category,
     description: description || "",
     vendor: vendor || "",
     date: date || new Date().toISOString().slice(0, 10),
+    status: "draft",
+    submitted_at: null,
+    submitted_by: null,
+    approved_at: null,
+    approved_by: null,
+    rejected_at: null,
+    rejected_by: null,
+    rejection_reason: "",
     attachment_name: "",
     attachment_url: "",
   };
 
   db.prepare(
-    `INSERT INTO expenses (id, user_id, amount, category, description, vendor, date, attachment_name, attachment_url)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses
+      (id, user_id, organization_id, team_id, created_by, amount, category, description, vendor, date,
+       status, submitted_at, submitted_by, approved_at, approved_by, rejected_at, rejected_by,
+       rejection_reason, attachment_name, attachment_url)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     expense.id,
     expense.user_id,
+    expense.organization_id,
+    expense.team_id,
+    expense.created_by,
     expense.amount,
     expense.category,
     expense.description,
     expense.vendor,
     expense.date,
+    expense.status,
+    expense.submitted_at,
+    expense.submitted_by,
+    expense.approved_at,
+    expense.approved_by,
+    expense.rejected_at,
+    expense.rejected_by,
+    expense.rejection_reason,
     expense.attachment_name,
     expense.attachment_url,
   );
@@ -338,6 +517,9 @@ app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (r
 
   if (!expense) {
     return res.status(404).json({ error: "Expense not found." });
+  }
+  if (expense.status !== "draft") {
+    return res.status(409).json({ error: "Only draft expenses can be changed." });
   }
 
   if (!req.file) {
@@ -360,10 +542,10 @@ app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (r
 
 app.get("/api/expenses/:id/attachment/file", authenticate, (req, res) => {
   const expense = db
-    .prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?")
-    .get(req.params.id, req.userId);
+    .prepare("SELECT * FROM expenses WHERE id = ?")
+    .get(req.params.id);
 
-  if (!expense || !expense.attachment_name) {
+  if (!expense || !expense.attachment_name || !canAccessExpense(req, expense)) {
     return res.status(404).json({ error: "Attachment not found." });
   }
 
@@ -383,7 +565,7 @@ app.get("/api/expenses/:id/attachment/file", authenticate, (req, res) => {
 
 app.delete("/api/expenses/:id", authenticate, (req, res) => {
   const result = db
-    .prepare("DELETE FROM expenses WHERE id = ? AND user_id = ?")
+    .prepare("DELETE FROM expenses WHERE id = ? AND user_id = ? AND status = 'draft'")
     .run(req.params.id, req.userId);
 
   if (result.changes === 0) {
@@ -391,6 +573,77 @@ app.delete("/api/expenses/:id", authenticate, (req, res) => {
   }
 
   res.status(204).send();
+});
+
+app.post("/api/expenses/:id/submit", authenticate, (req, res) => {
+  const expense = db.prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?").get(req.params.id, req.userId);
+  if (!expense) return res.status(404).json({ error: "Expense not found." });
+  if (expense.status !== "draft") return res.status(409).json({ error: "Only draft expenses can be submitted." });
+
+  const submittedAt = new Date().toISOString();
+  db.prepare(
+    "UPDATE expenses SET status = 'submitted', submitted_at = ?, submitted_by = ? WHERE id = ? AND user_id = ? AND status = 'draft'"
+  ).run(submittedAt, req.userId, expense.id, req.userId);
+  recordApproval(expense.id, expense.organization_id, req.userId, "submitted", "draft", "submitted");
+  res.json(db.prepare("SELECT * FROM expenses WHERE id = ?").get(expense.id));
+});
+
+app.get("/api/expenses/pending-approval", authenticate, authorize("manager"), (req, res) => {
+  const scope = expenseScope(req);
+  const items = db
+    .prepare(`SELECT * FROM expenses WHERE ${scope.clause} AND status = 'submitted' ORDER BY submitted_at ASC, id ASC`)
+    .all(...scope.params);
+  res.json(items);
+});
+
+app.get("/api/expenses/:id/approval-history", authenticate, (req, res) => {
+  const expense = db.prepare("SELECT * FROM expenses WHERE id = ?").get(req.params.id);
+  if (!expense || !canAccessExpense(req, expense)) return res.status(404).json({ error: "Expense not found." });
+  const history = db
+    .prepare("SELECT * FROM approval_history WHERE expense_id = ? ORDER BY created_at ASC")
+    .all(expense.id);
+  res.json(history);
+});
+
+app.post("/api/expenses/:id/approve", authenticate, authorize("manager"), (req, res) => {
+  const expense = db.prepare("SELECT * FROM expenses WHERE id = ?").get(req.params.id);
+  if (!expense || !canApproveExpense(req, expense)) return res.status(404).json({ error: "Expense not found." });
+  if (expense.status !== "submitted") return res.status(409).json({ error: "Only submitted expenses can be approved." });
+
+  const approvedAt = new Date().toISOString();
+  db.prepare(
+    "UPDATE expenses SET status = 'approved', approved_at = ?, approved_by = ?, rejection_reason = '' WHERE id = ? AND status = 'submitted'"
+  ).run(approvedAt, req.userId, expense.id);
+  recordApproval(expense.id, expense.organization_id, req.userId, "approved", "submitted", "approved", String(req.body?.comment || "").trim());
+  res.json(db.prepare("SELECT * FROM expenses WHERE id = ?").get(expense.id));
+});
+
+app.post("/api/expenses/:id/reject", authenticate, authorize("manager"), (req, res) => {
+  const reason = String(req.body?.reason || "").trim();
+  if (!reason || reason.length > 1000) return res.status(400).json({ error: "A rejection reason is required." });
+  const expense = db.prepare("SELECT * FROM expenses WHERE id = ?").get(req.params.id);
+  if (!expense || !canApproveExpense(req, expense)) return res.status(404).json({ error: "Expense not found." });
+  if (expense.status !== "submitted") return res.status(409).json({ error: "Only submitted expenses can be rejected." });
+
+  const rejectedAt = new Date().toISOString();
+  db.prepare(
+    "UPDATE expenses SET status = 'rejected', rejected_at = ?, rejected_by = ?, rejection_reason = ? WHERE id = ? AND status = 'submitted'"
+  ).run(rejectedAt, req.userId, reason, expense.id);
+  recordApproval(expense.id, expense.organization_id, req.userId, "rejected", "submitted", "rejected", reason);
+  res.json(db.prepare("SELECT * FROM expenses WHERE id = ?").get(expense.id));
+});
+
+app.post("/api/expenses/:id/return", authenticate, authorize("manager"), (req, res) => {
+  const expense = db.prepare("SELECT * FROM expenses WHERE id = ?").get(req.params.id);
+  if (!expense || !canApproveExpense(req, expense)) return res.status(404).json({ error: "Expense not found." });
+  if (expense.status !== "submitted") return res.status(409).json({ error: "Only submitted expenses can be returned." });
+
+  const comment = String(req.body?.comment || "").trim();
+  db.prepare(
+    "UPDATE expenses SET status = 'draft', submitted_at = NULL, submitted_by = NULL WHERE id = ? AND status = 'submitted'"
+  ).run(expense.id);
+  recordApproval(expense.id, expense.organization_id, req.userId, "returned", "submitted", "draft", comment);
+  res.json(db.prepare("SELECT * FROM expenses WHERE id = ?").get(expense.id));
 });
 
 app.get("/api/budgets", authenticate, (req, res) => {
@@ -429,24 +682,26 @@ app.get("/api/summary", authenticate, (req, res) => {
   const totalsByCategory = {};
   for (const cat of CATEGORIES) totalsByCategory[cat] = 0;
 
+  const scope = expenseScope(req);
+
   const rows = db
-    .prepare("SELECT category, SUM(amount) as total FROM expenses WHERE user_id = ? GROUP BY category")
-    .all(req.userId);
+    .prepare(`SELECT category, SUM(amount) as total FROM expenses WHERE ${scope.clause} GROUP BY category`)
+    .all(...scope.params);
 
   for (const row of rows) {
     totalsByCategory[row.category] = row.total;
   }
 
   const { total: grandTotal, count } = db
-    .prepare("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE user_id = ?")
-    .get(req.userId);
+    .prepare(`SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as count FROM expenses WHERE ${scope.clause}`)
+    .get(...scope.params);
 
   const monthPrefix = new Date().toISOString().slice(0, 7);
   const monthRows = db
     .prepare(
-      "SELECT category, SUM(amount) as total FROM expenses WHERE user_id = ? AND date LIKE ? GROUP BY category"
+      `SELECT category, SUM(amount) as total FROM expenses WHERE ${scope.clause} AND date LIKE ? GROUP BY category`
     )
-    .all(req.userId, `${monthPrefix}%`);
+    .all(...scope.params, `${monthPrefix}%`);
 
   const monthSpentByCategory = {};
   for (const cat of CATEGORIES) monthSpentByCategory[cat] = 0;

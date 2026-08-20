@@ -1,4 +1,5 @@
 const { DatabaseSync } = require("node:sqlite");
+const { randomUUID } = require("node:crypto");
 const path = require("path");
 
 const DB_PATH = path.join(__dirname, "owotrack.db");
@@ -10,12 +11,33 @@ const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA foreign_keys = ON");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS teams (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(organization_id, name)
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
+    organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    role TEXT NOT NULL DEFAULT 'employee',
     created_at TEXT NOT NULL
   )
 `);
@@ -40,11 +62,22 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE CASCADE,
     amount REAL NOT NULL,
     category TEXT NOT NULL,
     description TEXT DEFAULT '',
     vendor TEXT DEFAULT '',
     date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    submitted_at TEXT,
+    submitted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TEXT,
+    approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    rejected_at TEXT,
+    rejected_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    rejection_reason TEXT DEFAULT '',
     attachment_name TEXT DEFAULT '',
     attachment_url TEXT DEFAULT ''
   )
@@ -72,6 +105,77 @@ if (!expenseColumns.some((column) => column.name === "attachment_name")) {
 if (!expenseColumns.some((column) => column.name === "attachment_url")) {
   db.exec("ALTER TABLE expenses ADD COLUMN attachment_url TEXT DEFAULT ''");
 }
+if (!expenseColumns.some((column) => column.name === "organization_id")) {
+  db.exec("ALTER TABLE expenses ADD COLUMN organization_id TEXT");
+}
+if (!expenseColumns.some((column) => column.name === "team_id")) {
+  db.exec("ALTER TABLE expenses ADD COLUMN team_id TEXT");
+}
+if (!expenseColumns.some((column) => column.name === "created_by")) {
+  db.exec("ALTER TABLE expenses ADD COLUMN created_by TEXT");
+}
+if (!expenseColumns.some((column) => column.name === "status")) {
+  db.exec("ALTER TABLE expenses ADD COLUMN status TEXT NOT NULL DEFAULT 'draft'");
+}
+for (const column of [
+  "submitted_at",
+  "submitted_by",
+  "approved_at",
+  "approved_by",
+  "rejected_at",
+  "rejected_by",
+  "rejection_reason",
+]) {
+  if (!expenseColumns.some((existing) => existing.name === column)) {
+    db.exec(`ALTER TABLE expenses ADD COLUMN ${column} ${column === "rejection_reason" ? "TEXT DEFAULT ''" : "TEXT"}`);
+  }
+}
+
+const userColumns = db.prepare("PRAGMA table_info(users)").all();
+if (!userColumns.some((column) => column.name === "organization_id")) {
+  db.exec("ALTER TABLE users ADD COLUMN organization_id TEXT");
+}
+if (!userColumns.some((column) => column.name === "team_id")) {
+  db.exec("ALTER TABLE users ADD COLUMN team_id TEXT");
+}
+if (!userColumns.some((column) => column.name === "role")) {
+  db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'employee'");
+}
+
+// Legacy users did not have an organization or team. Give each one a private
+// default scope so existing data remains isolated until an administrator
+// explicitly assigns users to a shared organization/team.
+const legacyUsers = db
+  .prepare("SELECT id, name FROM users WHERE organization_id IS NULL OR organization_id = ''")
+  .all();
+for (const user of legacyUsers) {
+  const organizationId = randomUUID();
+  const teamId = randomUUID();
+  const createdAt = new Date().toISOString();
+  db.prepare("INSERT INTO organizations (id, name, created_at) VALUES (?, ?, ?)").run(
+    organizationId,
+    `${user.name}'s organization`,
+    createdAt,
+  );
+  db.prepare(
+    "INSERT INTO teams (id, organization_id, name, created_at) VALUES (?, ?, ?, ?)"
+  ).run(teamId, organizationId, "General", createdAt);
+  db.prepare("UPDATE users SET organization_id = ?, team_id = ?, role = 'admin' WHERE id = ?").run(
+    organizationId,
+    teamId,
+    user.id,
+  );
+}
+
+// Attach legacy expenses to their owner's scope and keep them editable drafts.
+db.exec(`
+  UPDATE expenses
+  SET organization_id = (SELECT organization_id FROM users WHERE users.id = expenses.user_id),
+      team_id = (SELECT team_id FROM users WHERE users.id = expenses.user_id),
+      created_by = user_id,
+      status = COALESCE(status, 'draft')
+  WHERE organization_id IS NULL OR organization_id = ''
+`);
 
 const budgetColumns = db.prepare("PRAGMA table_info(budgets)").all();
 if (!budgetColumns.some((column) => column.name === "user_id")) {
@@ -134,15 +238,40 @@ ensureForeignKey(
   `CREATE TABLE expenses (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE CASCADE,
     amount REAL NOT NULL,
     category TEXT NOT NULL,
     description TEXT DEFAULT '',
     vendor TEXT DEFAULT '',
     date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    submitted_at TEXT,
+    submitted_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TEXT,
+    approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    rejected_at TEXT,
+    rejected_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    rejection_reason TEXT DEFAULT '',
     attachment_name TEXT DEFAULT '',
     attachment_url TEXT DEFAULT ''
   )`
 );
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS approval_history (
+    id TEXT PRIMARY KEY,
+    expense_id TEXT NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+    organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+    actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    from_status TEXT NOT NULL,
+    to_status TEXT NOT NULL,
+    comment TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  )
+`);
 
 ensureForeignKey(
   "budgets",

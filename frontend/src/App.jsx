@@ -39,6 +39,7 @@ export default function App() {
   const [expenses, setExpenses] = useState([]);
   const [expensesTotal, setExpensesTotal] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [pendingApprovals, setPendingApprovals] = useState([]);
   const EXPENSES_PAGE_SIZE = 50;
   const [summary, setSummary] = useState({
     totalsByCategory: {},
@@ -78,17 +79,22 @@ export default function App() {
   async function loadAll() {
     if (!user) return;
 
-    const [catsRes, expRes, sumRes] = await Promise.all([
+    const requests = [
       apiFetch("/api/categories"),
       apiFetch(
         `/api/expenses?limit=${EXPENSES_PAGE_SIZE}${filterCategory ? `&category=${filterCategory}` : ""}`
       ),
       apiFetch("/api/summary"),
-    ]);
+    ];
+    if (user.role === "manager" || user.role === "admin") {
+      requests.push(apiFetch("/api/expenses/pending-approval"));
+    }
+    const [catsRes, expRes, sumRes, pendingRes] = await Promise.all(requests);
 
     setCategories(catsRes || []);
     setExpenses(expRes?.items || []);
     setExpensesTotal(expRes?.total || 0);
+    setPendingApprovals(pendingRes || []);
     setSummary(sumRes || {
       totalsByCategory: {},
       grandTotal: 0,
@@ -156,12 +162,13 @@ export default function App() {
 
     try {
       await apiFetch("/api/auth/logout", { method: "POST" });
-    } catch (error) {
+    } catch {
       // Ignore logout errors and still clear the local session.
     } finally {
       setUser(null);
       setCategories([]);
       setExpenses([]);
+      setPendingApprovals([]);
       setSummary({
         totalsByCategory: {},
         grandTotal: 0,
@@ -220,6 +227,36 @@ export default function App() {
   async function handleDelete(id) {
     await apiFetch(`/api/expenses/${id}`, { method: "DELETE" });
     loadAll();
+  }
+
+  async function handleSubmitForApproval(id) {
+    try {
+      await apiFetch(`/api/expenses/${id}/submit`, { method: "POST" });
+      await loadAll();
+    } catch (submitError) {
+      setError(submitError.message || "Could not submit expense.");
+    }
+  }
+
+  async function handleApproval(id, action) {
+    const body = {};
+    if (action === "reject") {
+      const reason = window.prompt("Why is this expense being rejected?");
+      if (!reason?.trim()) return;
+      body.reason = reason.trim();
+    } else if (action === "return") {
+      body.comment = window.prompt("Optional correction note:")?.trim() || "";
+    }
+
+    try {
+      await apiFetch(`/api/expenses/${id}/${action}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      await loadAll();
+    } catch (approvalError) {
+      setError(approvalError.message || "Could not update approval status.");
+    }
   }
 
   async function handleViewAttachment(expenseId) {
@@ -331,6 +368,7 @@ export default function App() {
         <div>
           <h1>Owo Track</h1>
           <p className="subtitle">Welcome, {user?.name || "there"}</p>
+          <p className="role-label">{user?.role || "employee"}</p>
         </div>
         <button className="logout-button" onClick={handleLogout}>Log out</button>
       </header>
@@ -474,6 +512,37 @@ export default function App() {
         </form>
       </section>
 
+      {(user.role === "manager" || user.role === "admin") && (
+        <section className="list-section approval-section">
+          <div className="list-header">
+            <h2>Pending approvals ({pendingApprovals.length})</h2>
+            <span className="approval-scope">
+              {user.role === "manager" ? "Assigned team" : "Organization"}
+            </span>
+          </div>
+          {pendingApprovals.length === 0 ? (
+            <p className="empty">No expenses are waiting for approval.</p>
+          ) : (
+            <div className="approval-list">
+              {pendingApprovals.map((expense) => (
+                <div className="approval-item" key={expense.id}>
+                  <div>
+                    <strong>{expense.category} — ₦{expense.amount.toLocaleString()}</strong>
+                    <span>{expense.vendor || "No vendor"} · {expense.date}</span>
+                    {expense.description && <span>{expense.description}</span>}
+                  </div>
+                  <div className="approval-actions">
+                    <button type="button" onClick={() => handleApproval(expense.id, "approve")}>Approve</button>
+                    <button type="button" className="return" onClick={() => handleApproval(expense.id, "return")}>Return</button>
+                    <button type="button" className="reject" onClick={() => handleApproval(expense.id, "reject")}>Reject</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="list-section">
         <div className="list-header">
           <h2>Expenses ({expensesTotal})</h2>
@@ -492,13 +561,14 @@ export default function App() {
               <th>Vendor</th>
               <th>Description</th>
               <th>Amount</th>
+              <th>Status</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {expenses.length === 0 && (
               <tr>
-                <td colSpan={6} className="empty">No expenses recorded yet.</td>
+                <td colSpan={7} className="empty">No expenses recorded yet.</td>
               </tr>
             )}
             {expenses.map((e) => (
@@ -521,8 +591,14 @@ export default function App() {
                     )}
                   </div>
                 </td>
+                <td><span className={`status-badge status-${e.status || "draft"}`}>{e.status || "draft"}</span></td>
                 <td>
-                  <button className="delete" onClick={() => handleDelete(e.id)}>✕</button>
+                  {e.status === "draft" && e.user_id === user.id && (
+                    <>
+                      <button className="submit-expense" onClick={() => handleSubmitForApproval(e.id)}>Submit</button>
+                      <button className="delete" onClick={() => handleDelete(e.id)}>✕</button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
