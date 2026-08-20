@@ -647,13 +647,15 @@ app.post("/api/expenses/:id/return", authenticate, authorize("manager"), (req, r
 });
 
 app.get("/api/budgets", authenticate, (req, res) => {
-  const rows = db.prepare("SELECT category, monthly_limit FROM budgets WHERE user_id = ?").all(req.userId);
+  const rows = db
+    .prepare("SELECT category, monthly_limit FROM organization_budgets WHERE organization_id = ?")
+    .all(req.user.organization_id);
   const budgets = {};
   for (const row of rows) budgets[row.category] = row.monthly_limit;
   res.json(budgets);
 });
 
-app.put("/api/budgets/:category", authenticate, (req, res) => {
+app.put("/api/budgets/:category", authenticate, authorize("admin"), (req, res) => {
   const { category } = req.params;
   const { monthly_limit } = req.body;
 
@@ -665,16 +667,17 @@ app.put("/api/budgets/:category", authenticate, (req, res) => {
   }
 
   db.prepare(
-    `INSERT INTO budgets (user_id, category, monthly_limit)
-     VALUES (?, ?, ?)
-     ON CONFLICT(user_id, category) DO UPDATE SET monthly_limit = excluded.monthly_limit`
-  ).run(req.userId, category, Number(monthly_limit));
+     `INSERT INTO organization_budgets (organization_id, category, monthly_limit)
+      VALUES (?, ?, ?)
+      ON CONFLICT(organization_id, category) DO UPDATE SET monthly_limit = excluded.monthly_limit`
+    ).run(req.user.organization_id, category, Number(monthly_limit));
 
   res.json({ category, monthly_limit: Number(monthly_limit) });
 });
 
-app.delete("/api/budgets/:category", authenticate, (req, res) => {
-  db.prepare("DELETE FROM budgets WHERE user_id = ? AND category = ?").run(req.userId, req.params.category);
+app.delete("/api/budgets/:category", authenticate, authorize("admin"), (req, res) => {
+  db.prepare("DELETE FROM organization_budgets WHERE organization_id = ? AND category = ?")
+    .run(req.user.organization_id, req.params.category);
   res.status(204).send();
 });
 
@@ -707,7 +710,9 @@ app.get("/api/summary", authenticate, (req, res) => {
   for (const cat of CATEGORIES) monthSpentByCategory[cat] = 0;
   for (const row of monthRows) monthSpentByCategory[row.category] = row.total;
 
-  const budgetRows = db.prepare("SELECT category, monthly_limit FROM budgets WHERE user_id = ?").all(req.userId);
+  const budgetRows = db
+    .prepare("SELECT category, monthly_limit FROM organization_budgets WHERE organization_id = ?")
+    .all(req.user.organization_id);
   const budgets = {};
   for (const row of budgetRows) budgets[row.category] = row.monthly_limit;
 

@@ -92,6 +92,15 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS organization_budgets (
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    category TEXT NOT NULL,
+    monthly_limit REAL NOT NULL,
+    PRIMARY KEY(organization_id, category)
+  )
+`);
+
 // --- Column migrations for databases created before certain fields existed ---
 
 const expenseColumns = db.prepare("PRAGMA table_info(expenses)").all();
@@ -175,6 +184,17 @@ db.exec(`
       created_by = user_id,
       status = COALESCE(status, 'draft')
   WHERE organization_id IS NULL OR organization_id = ''
+`);
+
+// Move any legacy personal limits into organization-level limits. If several
+// users in one organization had the same category configured, the first
+// value is retained until an Admin explicitly sets the organization limit.
+db.exec(`
+  INSERT OR IGNORE INTO organization_budgets (organization_id, category, monthly_limit)
+  SELECT users.organization_id, budgets.category, budgets.monthly_limit
+  FROM budgets
+  JOIN users ON users.id = budgets.user_id
+  WHERE users.organization_id IS NOT NULL AND users.organization_id != ''
 `);
 
 const budgetColumns = db.prepare("PRAGMA table_info(budgets)").all();

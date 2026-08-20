@@ -40,6 +40,11 @@ export default function App() {
   const [expensesTotal, setExpensesTotal] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminTeams, setAdminTeams] = useState([]);
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "employee", team_id: "" });
+  const [adminError, setAdminError] = useState("");
   const EXPENSES_PAGE_SIZE = 50;
   const [summary, setSummary] = useState({
     totalsByCategory: {},
@@ -89,12 +94,18 @@ export default function App() {
     if (user.role === "manager" || user.role === "admin") {
       requests.push(apiFetch("/api/expenses/pending-approval"));
     }
-    const [catsRes, expRes, sumRes, pendingRes] = await Promise.all(requests);
+    if (user.role === "admin") {
+      requests.push(apiFetch("/api/users"));
+      requests.push(apiFetch("/api/teams"));
+    }
+    const [catsRes, expRes, sumRes, pendingRes, usersRes, teamsRes] = await Promise.all(requests);
 
     setCategories(catsRes || []);
     setExpenses(expRes?.items || []);
     setExpensesTotal(expRes?.total || 0);
     setPendingApprovals(pendingRes || []);
+    setAdminUsers(usersRes || []);
+    setAdminTeams(teamsRes || []);
     setSummary(sumRes || {
       totalsByCategory: {},
       grandTotal: 0,
@@ -169,6 +180,8 @@ export default function App() {
       setCategories([]);
       setExpenses([]);
       setPendingApprovals([]);
+      setAdminUsers([]);
+      setAdminTeams([]);
       setSummary({
         totalsByCategory: {},
         grandTotal: 0,
@@ -256,6 +269,62 @@ export default function App() {
       await loadAll();
     } catch (approvalError) {
       setError(approvalError.message || "Could not update approval status.");
+    }
+  }
+
+  async function handleCreateTeam(e) {
+    e.preventDefault();
+    setAdminError("");
+    try {
+      await apiFetch("/api/teams", {
+        method: "POST",
+        body: JSON.stringify({ name: newTeamName }),
+      });
+      setNewTeamName("");
+      await loadAll();
+    } catch (createError) {
+      setAdminError(createError.message || "Could not create team.");
+    }
+  }
+
+  async function handleCreateUser(e) {
+    e.preventDefault();
+    setAdminError("");
+    try {
+      await apiFetch("/api/users", {
+        method: "POST",
+        body: JSON.stringify(newUser),
+      });
+      setNewUser({ name: "", email: "", password: "", role: "employee", team_id: "" });
+      await loadAll();
+    } catch (createError) {
+      setAdminError(createError.message || "Could not create user.");
+    }
+  }
+
+  async function handleRoleChange(userId, role) {
+    setAdminError("");
+    try {
+      await apiFetch(`/api/users/${userId}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+      });
+      await loadAll();
+    } catch (roleError) {
+      setAdminError(roleError.message || "Could not update role.");
+    }
+  }
+
+  async function handleTeamChange(userId, teamId) {
+    setAdminError("");
+    try {
+      await apiFetch(`/api/users/${userId}/team`, {
+        method: "PATCH",
+        body: JSON.stringify({ team_id: teamId }),
+      });
+      await loadAll();
+    } catch (teamError) {
+      setAdminError(teamError.message || "Could not update team.");
     }
   }
 
@@ -388,8 +457,140 @@ export default function App() {
           ))}
       </section>
 
+        {user.role === "admin" && (
+          <section className="admin-section">
+            <div className="admin-heading">
+              <div>
+                <h2>Admin workspace</h2>
+                <p className="section-note">Manage organization access, teams, and approval coverage.</p>
+              </div>
+              <span className="admin-organization">{user.organization_id ? "Organization owner" : "Admin"}</span>
+            </div>
+
+            <div className="admin-metrics">
+              <div><strong>{adminUsers.length}</strong><span>Users</span></div>
+              <div><strong>{adminTeams.length}</strong><span>Teams</span></div>
+              <div><strong>{pendingApprovals.length}</strong><span>Pending approvals</span></div>
+              <div><strong>{summary.count}</strong><span>Visible expenses</span></div>
+            </div>
+
+            <div className="admin-grid">
+              <form className="admin-card" onSubmit={handleCreateTeam}>
+                <h3>Create team</h3>
+                <label>
+                  Team name
+                  <input
+                    value={newTeamName}
+                    onChange={(e) => setNewTeamName(e.target.value)}
+                    maxLength={100}
+                    required
+                    placeholder="e.g. Operations"
+                  />
+                </label>
+                <button type="submit">Add team</button>
+              </form>
+
+              <form className="admin-card" onSubmit={handleCreateUser}>
+                <h3>Create organization user</h3>
+                <div className="admin-form-row">
+                  <label>
+                    Name
+                    <input
+                      value={newUser.name}
+                      onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Email
+                    <input
+                      type="email"
+                      value={newUser.email}
+                      onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                      required
+                    />
+                  </label>
+                </div>
+                <div className="admin-form-row">
+                  <label>
+                    Temporary password
+                    <input
+                      type="password"
+                      minLength={6}
+                      value={newUser.password}
+                      onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Role
+                    <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}>
+                      <option value="employee">Employee</option>
+                      <option value="manager">Manager</option>
+                    </select>
+                  </label>
+                </div>
+                <label>
+                  Team
+                  <select
+                    value={newUser.team_id}
+                    onChange={(e) => setNewUser({ ...newUser, team_id: e.target.value })}
+                    required
+                  >
+                    <option value="">Select team...</option>
+                    {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                  </select>
+                </label>
+                <button type="submit" disabled={adminTeams.length === 0}>Create user</button>
+              </form>
+            </div>
+
+            {adminError && <p className="error">{adminError}</p>}
+
+            <div className="admin-card user-management-card">
+              <div className="list-header">
+                <h3>Organization users</h3>
+                <span className="section-note">Managers approve only expenses from their selected team.</span>
+              </div>
+              <div className="admin-user-list">
+                {adminUsers.map((managedUser) => (
+                  <div className="admin-user-row" key={managedUser.id}>
+                    <div>
+                      <strong>{managedUser.name}</strong>
+                      <span>{managedUser.email}</span>
+                    </div>
+                    <select
+                      value={managedUser.role}
+                      disabled={managedUser.id === user.id}
+                      onChange={(e) => handleRoleChange(managedUser.id, e.target.value)}
+                      aria-label={`Role for ${managedUser.name}`}
+                    >
+                      <option value="employee">Employee</option>
+                      <option value="manager">Manager</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <select
+                      value={managedUser.team_id || ""}
+                      onChange={(e) => handleTeamChange(managedUser.id, e.target.value)}
+                      aria-label={`Team for ${managedUser.name}`}
+                    >
+                      {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+                {adminUsers.length === 0 && <p className="empty">No organization users found.</p>}
+              </div>
+            </div>
+          </section>
+        )}
+
       <section className="budgets-section">
-        <h2>Monthly Budgets {summary.month && <span className="month-label">({summary.month})</span>}</h2>
+        <div className="section-heading-row">
+          <h2>Monthly Budgets {summary.month && <span className="month-label">({summary.month})</span>}</h2>
+          <span className="section-note">
+            {user.role === "admin" ? "Organization limits" : "Read-only organization limits"}
+          </span>
+        </div>
         <div className="budget-grid">
           {categories.map((cat) => {
             const spent = summary.monthSpentByCategory?.[cat] || 0;
@@ -402,7 +603,7 @@ export default function App() {
               <div className="budget-card" key={cat}>
                 <div className="budget-card-header">
                   <span>{cat}</span>
-                  {hasLimit && (
+                  {hasLimit && user.role === "admin" && (
                     <button className="clear-budget" onClick={() => handleClearBudget(cat)}>
                       clear
                     </button>
@@ -422,7 +623,7 @@ export default function App() {
                       {overBudget && " — over budget"}
                     </div>
                   </>
-                ) : (
+                ) : user.role === "admin" ? (
                   <div className="budget-set">
                     <input
                       type="number"
@@ -433,6 +634,8 @@ export default function App() {
                     />
                     <button onClick={() => handleSetBudget(cat)}>Set</button>
                   </div>
+                ) : (
+                  <div className="budget-unset">No limit configured by your Admin.</div>
                 )}
               </div>
             );
