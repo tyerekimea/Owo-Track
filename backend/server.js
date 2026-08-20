@@ -1,5 +1,3 @@
-import { authorize } from './authorize.js';
-
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -263,18 +261,34 @@ app.get("/api/categories", authenticate, (req, res) => {
   res.json(CATEGORIES);
 });
 
+const DEFAULT_EXPENSE_LIMIT = 50;
+const MAX_EXPENSE_LIMIT = 200;
+
 app.get("/api/expenses", authenticate, (req, res) => {
   const { category } = req.query;
 
-  let rows;
-  if (category) {
-    rows = db
-      .prepare("SELECT * FROM expenses WHERE user_id = ? AND category = ? ORDER BY date DESC")
-      .all(req.userId, category);
-  } else {
-    rows = db.prepare("SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC").all(req.userId);
-  }
-  res.json(rows);
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_EXPENSE_LIMIT;
+  limit = Math.min(limit, MAX_EXPENSE_LIMIT);
+
+  let offset = parseInt(req.query.offset, 10);
+  if (!Number.isFinite(offset) || offset < 0) offset = 0;
+
+  const whereClause = category ? "WHERE user_id = ? AND category = ?" : "WHERE user_id = ?";
+  const params = category ? [req.userId, category] : [req.userId];
+
+  const { count: total } = db
+    .prepare(`SELECT COUNT(*) as count FROM expenses ${whereClause}`)
+    .get(...params);
+
+  // `id` as a tiebreaker keeps ordering stable across pages when several
+  // expenses share the same date — without it, LIMIT/OFFSET over ties in
+  // the primary sort key isn't guaranteed to return each row exactly once.
+  const items = db
+    .prepare(`SELECT * FROM expenses ${whereClause} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`)
+    .all(...params, limit, offset);
+
+  res.json({ items, total, limit, offset });
 });
 
 app.post("/api/expenses", authenticate, (req, res) => {

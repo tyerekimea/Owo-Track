@@ -37,6 +37,9 @@ export default function App() {
   const [isLoadingUser, setIsLoadingUser] = useState(true);
   const [categories, setCategories] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [expensesTotal, setExpensesTotal] = useState(0);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const EXPENSES_PAGE_SIZE = 50;
   const [summary, setSummary] = useState({
     totalsByCategory: {},
     grandTotal: 0,
@@ -77,12 +80,15 @@ export default function App() {
 
     const [catsRes, expRes, sumRes] = await Promise.all([
       apiFetch("/api/categories"),
-      apiFetch(`/api/expenses${filterCategory ? `?category=${filterCategory}` : ""}`),
+      apiFetch(
+        `/api/expenses?limit=${EXPENSES_PAGE_SIZE}${filterCategory ? `&category=${filterCategory}` : ""}`
+      ),
       apiFetch("/api/summary"),
     ]);
 
     setCategories(catsRes || []);
-    setExpenses(expRes || []);
+    setExpenses(expRes?.items || []);
+    setExpensesTotal(expRes?.total || 0);
     setSummary(sumRes || {
       totalsByCategory: {},
       grandTotal: 0,
@@ -91,6 +97,21 @@ export default function App() {
       monthSpentByCategory: {},
       budgets: {},
     });
+  }
+
+  async function loadMoreExpenses() {
+    setIsLoadingMore(true);
+    try {
+      const res = await apiFetch(
+        `/api/expenses?limit=${EXPENSES_PAGE_SIZE}&offset=${expenses.length}${
+          filterCategory ? `&category=${filterCategory}` : ""
+        }`
+      );
+      setExpenses((prev) => [...prev, ...(res?.items || [])]);
+      setExpensesTotal(res?.total ?? expensesTotal);
+    } finally {
+      setIsLoadingMore(false);
+    }
   }
 
   useEffect(() => {
@@ -455,7 +476,7 @@ export default function App() {
 
       <section className="list-section">
         <div className="list-header">
-          <h2>Expenses ({expenses.length})</h2>
+          <h2>Expenses ({expensesTotal})</h2>
           <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
             <option value="">All categories</option>
             {categories.map((c) => (
@@ -507,6 +528,13 @@ export default function App() {
             ))}
           </tbody>
         </table>
+        {expenses.length < expensesTotal && (
+          <div className="load-more-row">
+            <button type="button" className="load-more" onClick={loadMoreExpenses} disabled={isLoadingMore}>
+              {isLoadingMore ? "Loading..." : `Load more (${expensesTotal - expenses.length} remaining)`}
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

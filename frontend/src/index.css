@@ -335,6 +335,32 @@ button.delete {
 }
 button.delete:hover { background: var(--danger-tint); }
 
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding-top: 1rem;
+}
+.load-more {
+  background: transparent;
+  border: 1px solid var(--sky);
+  border-radius: 999px;
+  padding: 0.5rem 1.25rem;
+  color: var(--sky-dark);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.load-more:hover:not(:disabled) {
+  background: var(--sky);
+  color: #fff;
+}
+.load-more:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .month-label {
   font-weight: 400;
   color: var(--text-muted);
