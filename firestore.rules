@@ -41,11 +41,14 @@ service cloud.firestore {
       match /expenses/{expenseId} {
         allow read: if sameOrganization(orgId)
           && (isAdmin()
-            || userDoc().role == 'manager'
+              || (userDoc().role == 'manager' && resource.data.team_id == userDoc().team_id)
             || resource.data.user_id == request.auth.uid);
         allow create: if sameOrganization(orgId)
-          && request.resource.data.user_id == request.auth.uid;
+            && request.resource.data.organization_id == orgId
+            && request.resource.data.user_id == request.auth.uid;
         allow update: if sameOrganization(orgId)
+            && request.resource.data.organization_id == orgId
+            && request.resource.data.user_id == resource.data.user_id
           && (isAdmin()
             || resource.data.user_id == request.auth.uid
             || (userDoc().role == 'manager' && resource.data.team_id == userDoc().team_id));

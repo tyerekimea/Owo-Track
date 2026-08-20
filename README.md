@@ -48,3 +48,22 @@ default — override with a `.env` file in `frontend/`, see `frontend/.env.examp
   warning in the console when the server starts. It's safe to ignore for this MVP; if it
   becomes a blocker later, the queries are plain SQL and would port easily to `better-sqlite3`
   or `pg` (Postgres).
+
+## Firebase and Vercel migration
+
+Firebase configuration has been added for the planned production migration:
+
+- Firebase Authentication for account login and password recovery.
+- Firestore for organizations, teams, users, expenses, approvals, and budgets.
+- Firebase Storage for receipt files.
+- Vercel configuration for building the Vite frontend.
+
+Before deploying, enable Email/Password authentication in Firebase and add the
+variables from `frontend/.env.example` to Vercel. The backend also requires
+`FIREBASE_SERVICE_ACCOUNT_JSON` from a Firebase service account; store it as a
+Vercel secret and never commit it.
+
+The existing SQLite data still requires an explicit migration before production
+cutover. Existing custom PBKDF2 passwords are not automatically portable to
+Firebase Authentication, so existing users will need password-reset links during
+the cutover.
