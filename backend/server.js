@@ -14,6 +14,7 @@ const {
   getUserForSession,
   getSessionExpiry,
   isSessionExpired,
+  SESSION_DURATION_MS,
 } = require("./auth");
 
 const app = express();
@@ -48,9 +49,45 @@ app.use(
       }
       return callback(new Error("Not allowed by CORS"));
     },
+    credentials: true, // required for the browser to send/receive the session cookie
   })
 );
 app.use(express.json({ limit: "10mb" }));
+
+// Whether the session cookie requires HTTPS. Defaults to false so it works
+// on http://localhost in dev; set COOKIE_SECURE=true once deployed behind
+// HTTPS (required there — browsers won't send a Secure cookie over http).
+const COOKIE_SECURE = process.env.COOKIE_SECURE === "true";
+const SESSION_COOKIE_NAME = "owo_track_session";
+
+function setSessionCookie(res, token) {
+  res.cookie(SESSION_COOKIE_NAME, token, {
+    httpOnly: true, // not readable by JS — the whole point, closes the XSS-token-theft gap
+    secure: COOKIE_SECURE,
+    sameSite: "lax", // sent on same-site requests (incl. cross-port, e.g. :5173 -> :4000), blocked cross-site
+    maxAge: SESSION_DURATION_MS,
+    path: "/",
+  });
+}
+
+function clearSessionCookie(res) {
+  res.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+}
+
+// Minimal manual Cookie header parsing — avoids adding cookie-parser as a
+// dependency for the one cookie this app sets.
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  return header.split(";").reduce((acc, pair) => {
+    const idx = pair.indexOf("=");
+    if (idx === -1) return acc;
+    const key = pair.slice(0, idx).trim();
+    const value = decodeURIComponent(pair.slice(idx + 1).trim());
+    acc[key] = value;
+    return acc;
+  }, {});
+}
 
 // Trust the platform's proxy (Codespaces/most hosts sit behind one) so
 // req.ip reflects the real client rather than the proxy's address.
@@ -87,8 +124,7 @@ const upload = multer({
 });
 
 function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const token = parseCookies(req)[SESSION_COOKIE_NAME] || "";
 
   if (!token) {
     return res.status(401).json({ error: "Authentication required." });
@@ -157,8 +193,9 @@ app.post("/api/auth/register", registerLimiter, (req, res) => {
      VALUES (?, ?, ?, ?, ?)`
   ).run(uuidv4(), userId, token, createdAt, getSessionExpiry());
 
+  setSessionCookie(res, token);
+
   res.status(201).json({
-    token,
     user: {
       id: userId,
       name: String(name).trim(),
@@ -192,8 +229,9 @@ app.post("/api/auth/login", loginLimiter, (req, res) => {
      VALUES (?, ?, ?, ?, ?)`
   ).run(uuidv4(), user.id, token, createdAt, getSessionExpiry());
 
+  setSessionCookie(res, token);
+
   res.json({
-    token,
     user: {
       id: user.id,
       name: user.name,
@@ -214,6 +252,7 @@ app.get("/api/auth/me", authenticate, (req, res) => {
 
 app.post("/api/auth/logout", authenticate, (req, res) => {
   db.prepare("DELETE FROM sessions WHERE token = ?").run(req.session.token);
+  clearSessionCookie(res);
   res.status(204).send();
 });
 

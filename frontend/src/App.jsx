@@ -1,33 +1,18 @@
 import { useEffect, useState } from "react";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
-const STORAGE_KEY = "owo-track-token";
-
-function getToken() {
-  return localStorage.getItem(STORAGE_KEY) || "";
-}
-
-function getAuthHeaders(extra = {}) {
-  const token = getToken();
-  return {
-    ...extra,
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
-}
 
 async function apiFetch(path, options = {}) {
-  const headers = getAuthHeaders({
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  });
-
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers,
+    credentials: "include", // send/receive the httpOnly session cookie
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
   });
 
   if (response.status === 401) {
-    localStorage.removeItem(STORAGE_KEY);
     window.location.reload();
     return null;
   }
@@ -45,12 +30,11 @@ async function apiFetch(path, options = {}) {
 }
 
 export default function App() {
-  const [token, setToken] = useState(getToken());
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [authError, setAuthError] = useState("");
-  const [isLoadingUser, setIsLoadingUser] = useState(false);
+  const [isLoadingUser, setIsLoadingUser] = useState(true);
   const [categories, setCategories] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState({
@@ -75,33 +59,21 @@ export default function App() {
   const [pendingAttachment, setPendingAttachment] = useState(null);
 
   useEffect(() => {
-    const storedToken = getToken();
-    if (!storedToken) {
-      setUser(null);
-      return;
-    }
-
-    setIsLoadingUser(true);
-    apiFetch("/api/auth/me")
-      .then((data) => {
-        if (data?.user) {
-          setUser(data.user);
-        } else {
-          setUser(null);
-          localStorage.removeItem(STORAGE_KEY);
-          setToken("");
-        }
-      })
-      .catch(() => {
-        setUser(null);
-        localStorage.removeItem(STORAGE_KEY);
-        setToken("");
-      })
+    // Checks whether a valid session cookie already exists (e.g. a
+    // returning visitor). A 401 here is the normal, expected outcome for
+    // a logged-out visitor — not an error — so this deliberately calls
+    // fetch directly rather than apiFetch, whose 401 handler is meant for
+    // *already-logged-in* calls and would otherwise reload the page in a
+    // loop while checking.
+    fetch(`${API_URL}/api/auth/me`, { credentials: "include" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setUser(data?.user || null))
+      .catch(() => setUser(null))
       .finally(() => setIsLoadingUser(false));
-  }, [token]);
+  }, []);
 
   async function loadAll() {
-    if (!token) return;
+    if (!user) return;
 
     const [catsRes, expRes, sumRes] = await Promise.all([
       apiFetch("/api/categories"),
@@ -122,11 +94,11 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (token) {
+    if (user) {
       loadAll();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, filterCategory]);
+  }, [user, filterCategory]);
 
   async function handleAuthSubmit(e) {
     e.preventDefault();
@@ -140,6 +112,7 @@ export default function App() {
 
       const data = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
+        credentials: "include", // receive the httpOnly session cookie the server sets
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }).then(async (res) => {
@@ -150,8 +123,6 @@ export default function App() {
         return json;
       });
 
-      localStorage.setItem(STORAGE_KEY, data.token);
-      setToken(data.token);
       setUser(data.user);
       setAuthForm({ name: "", email: "", password: "" });
     } catch (error) {
@@ -160,15 +131,13 @@ export default function App() {
   }
 
   async function handleLogout() {
-    if (!token) return;
+    if (!user) return;
 
     try {
       await apiFetch("/api/auth/logout", { method: "POST" });
     } catch (error) {
       // Ignore logout errors and still clear the local session.
     } finally {
-      localStorage.removeItem(STORAGE_KEY);
-      setToken("");
       setUser(null);
       setCategories([]);
       setExpenses([]);
@@ -201,7 +170,7 @@ export default function App() {
         setUploading(true);
         const uploadResponse = await fetch(`${API_URL}/api/expenses/${createdExpense.id}/attachment`, {
           method: "POST",
-          headers: getAuthHeaders(),
+          credentials: "include",
           body: formData,
         });
 
@@ -235,7 +204,7 @@ export default function App() {
   async function handleViewAttachment(expenseId) {
     try {
       const response = await fetch(`${API_URL}/api/expenses/${expenseId}/attachment/file`, {
-        headers: getAuthHeaders(),
+        credentials: "include",
       });
       if (!response.ok) {
         throw new Error("Could not load attachment.");
@@ -268,7 +237,7 @@ export default function App() {
     loadAll();
   }
 
-  if (!token || isLoadingUser) {
+  if (!user || isLoadingUser) {
     return (
       <div className="page auth-page">
         <div className="auth-card">

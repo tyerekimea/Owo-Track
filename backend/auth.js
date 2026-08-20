@@ -54,4 +54,5 @@ module.exports = {
   getUserForSession,
   getSessionExpiry,
   isSessionExpired,
+  SESSION_DURATION_MS,
 };
