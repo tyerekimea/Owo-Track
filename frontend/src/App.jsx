@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { auth } from "./firebase";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:4000";
+const configuredApiUrl = import.meta.env.VITE_API_URL || "http://localhost:4000";
+// API paths below already include /api. Strip it from the configured base so
+// both a same-origin Vercel value (/api) and a separate backend URL work.
+const API_URL = configuredApiUrl.replace(/\/$/, "").replace(/\/api$/, "");
 
 async function apiFetch(path, options = {}) {
+  const token = auth.currentUser ? await auth.currentUser.getIdToken() : "";
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    credentials: "include", // send/receive the httpOnly session cookie
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -68,17 +75,22 @@ export default function App() {
   const [pendingAttachment, setPendingAttachment] = useState(null);
 
   useEffect(() => {
-    // Checks whether a valid session cookie already exists (e.g. a
-    // returning visitor). A 401 here is the normal, expected outcome for
-    // a logged-out visitor — not an error — so this deliberately calls
-    // fetch directly rather than apiFetch, whose 401 handler is meant for
-    // *already-logged-in* calls and would otherwise reload the page in a
-    // loop while checking.
-    fetch(`${API_URL}/api/auth/me`, { credentials: "include" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => setUser(data?.user || null))
-      .catch(() => setUser(null))
-      .finally(() => setIsLoadingUser(false));
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) {
+        setUser(null);
+        setIsLoadingUser(false);
+        return;
+      }
+      try {
+        const data = await apiFetch("/api/auth/me");
+        setUser(data?.user || null);
+      } catch {
+        setUser(null);
+      } finally {
+        setIsLoadingUser(false);
+      }
+    });
+    return unsubscribe;
   }, []);
 
   async function loadAll() {
@@ -143,24 +155,23 @@ export default function App() {
     setAuthError("");
 
     try {
-      const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
       const payload = authMode === "login"
         ? { email: authForm.email, password: authForm.password }
         : { name: authForm.name, email: authForm.email, password: authForm.password };
 
-      const data = await fetch(`${API_URL}${endpoint}`, {
-        method: "POST",
-        credentials: "include", // receive the httpOnly session cookie the server sets
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).then(async (res) => {
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(json.error || "Authentication failed.");
-        }
-        return json;
-      });
-
+      if (authMode === "login") {
+        await signInWithEmailAndPassword(auth, payload.email, payload.password);
+      } else {
+        const response = await fetch(`${API_URL}/api/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Registration failed.");
+        await signInWithEmailAndPassword(auth, payload.email, payload.password);
+      }
+      const data = await apiFetch("/api/auth/me");
       setUser(data.user);
       setAuthForm({ name: "", email: "", password: "" });
     } catch (error) {
@@ -176,6 +187,7 @@ export default function App() {
     } catch {
       // Ignore logout errors and still clear the local session.
     } finally {
+      await signOut(auth);
       setUser(null);
       setCategories([]);
       setExpenses([]);
@@ -212,6 +224,7 @@ export default function App() {
         const uploadResponse = await fetch(`${API_URL}/api/expenses/${createdExpense.id}/attachment`, {
           method: "POST",
           credentials: "include",
+          headers: { Authorization: `Bearer ${await auth.currentUser.getIdToken()}` },
           body: formData,
         });
 
@@ -332,6 +345,7 @@ export default function App() {
     try {
       const response = await fetch(`${API_URL}/api/expenses/${expenseId}/attachment/file`, {
         credentials: "include",
+        headers: { Authorization: `Bearer ${await auth.currentUser.getIdToken()}` },
       });
       if (!response.ok) {
         throw new Error("Could not load attachment.");

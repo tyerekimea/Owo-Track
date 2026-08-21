@@ -2,5 +2,10 @@
   "buildCommand": "npm --prefix frontend run build",
   "outputDirectory": "frontend/dist",
   "installCommand": "npm --prefix frontend install && npm --prefix backend install",
-  "framework": "vite"
+  "framework": "vite",
+  "functions": {
+    "api/[...path].js": {
+      "maxDuration": 60
+    }
+  }
 }

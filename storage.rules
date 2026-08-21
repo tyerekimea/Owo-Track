@@ -4,7 +4,16 @@ service firebase.storage {
   match /b/{bucket}/o {
     match /organizations/{orgId}/expenses/{expenseId}/{fileName} {
       allow read, write: if request.auth != null
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.organization_id == orgId;
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.organization_id == orgId
+        && (
+          firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          || firestore.get(/databases/(default)/documents/organizations/$(orgId)/expenses/$(expenseId)).data.user_id == request.auth.uid
+          || (
+            firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'manager'
+            && firestore.get(/databases/(default)/documents/organizations/$(orgId)/expenses/$(expenseId)).data.team_id
+              == firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.team_id
+          )
+        );
     }
   }
 }

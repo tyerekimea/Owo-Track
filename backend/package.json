@@ -2,12 +2,12 @@
   "name": "owo-track-backend",
   "version": "1.0.0",
   "description": "",
-  "main": "server.js",
+  "main": "firebase-server.js",
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node firebase-server.js",
     "test": "node --test"
   },
   "keywords": [],
