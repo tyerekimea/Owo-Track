@@ -1,4 +1,7 @@
-const admin = require("firebase-admin");
+const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getFirestore } = require("firebase-admin/firestore");
+const { getStorage } = require("firebase-admin/storage");
 
 function getServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -13,15 +16,15 @@ function getServiceAccount() {
   }
 }
 
-const app = admin.apps.length
-  ? admin.app()
-  : admin.initializeApp({
-      credential: admin.credential.cert(getServiceAccount()),
+const app = getApps().length
+  ? getApps()[0]
+  : initializeApp({
+      credential: cert(getServiceAccount()),
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
     });
 
-const firestore = admin.firestore(app);
-const storage = admin.storage(app).bucket();
-const auth = admin.auth(app);
+const firestore = getFirestore(app);
+const storage = getStorage(app).bucket();
+const auth = getAuth(app);
 
-module.exports = { admin, app, auth, firestore, storage };
+module.exports = { app, auth, firestore, storage };

@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -109,10 +111,12 @@ const registerLimiter = createRateLimiter({
 });
 
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-    filename: (req, file, cb) => cb(null, buildAttachmentName(file.originalname, req.userId || "user")),
-  }),
+  storage: process.env.FIREBASE_SERVICE_ACCOUNT_JSON && process.env.FIREBASE_STORAGE_BUCKET
+    ? multer.memoryStorage()
+    : multer.diskStorage({
+        destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+        filename: (req, file, cb) => cb(null, buildAttachmentName(file.originalname, req.userId || "user")),
+      }),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf", "text/plain"];
@@ -510,7 +514,7 @@ app.post("/api/expenses", authenticate, (req, res) => {
   res.status(201).json(expense);
 });
 
-app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (req, res) => {
+app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), async (req, res) => {
   const expense = db
     .prepare("SELECT * FROM expenses WHERE id = ? AND user_id = ?")
     .get(req.params.id, req.userId);
@@ -526,27 +530,61 @@ app.post("/api/expenses/:id/attachment", authenticate, upload.single("file"), (r
     return res.status(400).json({ error: "A file is required." });
   }
 
+  const filename = buildAttachmentName(req.file.originalname || req.file.filename, req.userId);
+  let attachmentName = req.file.filename;
+
+  if (req.file.buffer) {
+    const { storage } = require("./firebase-admin");
+    const objectPath = `organizations/${req.user.organization_id}/expenses/${req.params.id}/${filename}`;
+    const object = storage.file(objectPath);
+
+    await object.save(req.file.buffer, {
+      metadata: {
+        contentType: req.file.mimetype,
+        metadata: { originalName: req.file.originalname || filename },
+      },
+      resumable: false,
+    });
+    attachmentName = objectPath;
+  }
+
   const uploadedUrl = `/api/expenses/${req.params.id}/attachment/file`;
 
   db.prepare(
     "UPDATE expenses SET attachment_name = ?, attachment_url = ? WHERE id = ? AND user_id = ?"
-  ).run(req.file.filename, uploadedUrl, req.params.id, req.userId);
+  ).run(attachmentName, uploadedUrl, req.params.id, req.userId);
 
   res.json({
     attachment: {
-      name: req.file.filename,
+      name: attachmentName,
       url: uploadedUrl,
     },
   });
 });
 
-app.get("/api/expenses/:id/attachment/file", authenticate, (req, res) => {
+app.get("/api/expenses/:id/attachment/file", authenticate, async (req, res) => {
   const expense = db
     .prepare("SELECT * FROM expenses WHERE id = ?")
     .get(req.params.id);
 
   if (!expense || !expense.attachment_name || !canAccessExpense(req, expense)) {
     return res.status(404).json({ error: "Attachment not found." });
+  }
+
+  if (expense.attachment_name.startsWith("organizations/")) {
+    const { storage } = require("./firebase-admin");
+    const object = storage.file(expense.attachment_name);
+    const [metadata] = await object.getMetadata().catch(() => [null]);
+
+    if (!metadata) {
+      return res.status(404).json({ error: "Attachment not found." });
+    }
+
+    res.setHeader("Content-Type", metadata.contentType || "application/octet-stream");
+    object.createReadStream().on("error", () => {
+      if (!res.headersSent) res.status(404).json({ error: "Attachment not found." });
+    }).pipe(res);
+    return;
   }
 
   const filePath = path.join(UPLOAD_DIR, expense.attachment_name);
