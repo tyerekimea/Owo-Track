@@ -34,13 +34,20 @@ const CATEGORIES = [
   "Miscellaneous",
 ];
 
-// Allowed frontend origin(s). Defaults to the Vite dev server so local
-// development keeps working unchanged; set CORS_ORIGIN (comma-separated
-// for more than one) to the real frontend URL(s) in production.
-const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
+// Allowed frontend origin(s). Defaults to common local dev ports; set CORS_ORIGIN
+// (comma-separated for more than one) to the real frontend URL(s) in production.
+const envOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:3000",
+  "http://localhost:5174",
+  ...envOrigins,
+];
 
 app.use(
   cors({
@@ -50,7 +57,8 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(new Error("Not allowed by CORS"));
+      console.error(`[CORS Blocked] Request origin: "${origin}"`);
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true, // required for the browser to send/receive the session cookie
   })
