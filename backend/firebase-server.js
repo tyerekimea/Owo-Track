@@ -185,4 +185,11 @@ app.delete("/api/budgets/:category", authenticate, requireRole("admin"), async (
 app.get("/api/summary", authenticate, async (req, res) => { const all = (await readDocs(expenses(req.user.organization_id))).filter(userScope(req.user)); const totalsByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category).reduce((sum, e) => sum + Number(e.amount), 0)])); const month = new Date().toISOString().slice(0, 7); const monthSpentByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category && String(e.date).startsWith(month)).reduce((sum, e) => sum + Number(e.amount), 0)])); const budgetRows = await readDocs(budgets(req.user.organization_id)); res.json({ totalsByCategory, grandTotal: all.reduce((sum, e) => sum + Number(e.amount), 0), count: all.length, month, monthSpentByCategory, budgets: Object.fromEntries(budgetRows.map((b) => [b.id, b.monthly_limit])) }); });
 
 if (require.main === module) app.listen(PORT, () => console.log(`Firebase API listening on port ${PORT}`));
+
+// backend/firebase-server.js
+const express = require('express');
+const app = express();
+
+// ... your middleware and routes ...
+
 module.exports = app;
