@@ -187,8 +187,8 @@ app.get("/api/summary", authenticate, async (req, res) => { const all = (await r
 if (require.main === module) app.listen(PORT, () => console.log(`Firebase API listening on port ${PORT}`));
 
 // backend/firebase-server.js
-const express = require('express');
-const app = express();
+//const express = require('express');
+//const app = express();
 
 // ... your middleware and routes ...
 
