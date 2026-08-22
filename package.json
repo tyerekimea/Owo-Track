@@ -1,9 +1,9 @@
 {
+  "type": "module",
   "dependencies": {
     "firebase": "^12.18.0"
   },
-   "overrides": {
+  "overrides": {
     "jose": "4.15.5"
   }
-   
 }
