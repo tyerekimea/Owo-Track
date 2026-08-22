@@ -1,18 +1,21 @@
-require("dotenv").config();
+import dotenv from "dotenv";
+dotenv.config();
 
-const express = require("express");
-const cors = require("cors");
-const multer = require("multer");
-const { randomUUID } = require("node:crypto");
-const { auth, firestore, storage } = require("./firebase-admin");
-const { FieldValue, Timestamp } = require("firebase-admin/firestore");
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import { randomUUID } from "node:crypto";
+import { auth, firestore, storage } from "./firebase-admin.js";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const CATEGORIES = ["Rent", "Utilities", "Salaries", "Inventory", "Marketing", "Transport", "Equipment", "Miscellaneous"];
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173").split(",").map((v) => v.trim()).filter(Boolean);
+
 app.use(cors({ origin: (origin, cb) => (!origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"))), credentials: true }));
 app.use(express.json({ limit: "10mb" }));
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -25,6 +28,7 @@ const expenses = (orgId) => organizations().doc(orgId).collection("expenses");
 const teams = (orgId) => organizations().doc(orgId).collection("teams");
 const budgets = (orgId) => organizations().doc(orgId).collection("budgets");
 const history = (orgId, expenseId) => expenses(orgId).doc(expenseId).collection("approvalHistory");
+
 const plain = (value) => value instanceof Timestamp ? value.toDate().toISOString() : value;
 function serialize(data) {
   return Object.fromEntries(Object.entries(data).map(([key, value]) => [key, plain(value)]));
@@ -184,12 +188,8 @@ app.put("/api/budgets/:category", authenticate, requireRole("admin"), async (req
 app.delete("/api/budgets/:category", authenticate, requireRole("admin"), async (req, res) => { await budgets(req.user.organization_id).doc(req.params.category).delete(); res.status(204).send(); });
 app.get("/api/summary", authenticate, async (req, res) => { const all = (await readDocs(expenses(req.user.organization_id))).filter(userScope(req.user)); const totalsByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category).reduce((sum, e) => sum + Number(e.amount), 0)])); const month = new Date().toISOString().slice(0, 7); const monthSpentByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category && String(e.date).startsWith(month)).reduce((sum, e) => sum + Number(e.amount), 0)])); const budgetRows = await readDocs(budgets(req.user.organization_id)); res.json({ totalsByCategory, grandTotal: all.reduce((sum, e) => sum + Number(e.amount), 0), count: all.length, month, monthSpentByCategory, budgets: Object.fromEntries(budgetRows.map((b) => [b.id, b.monthly_limit])) }); });
 
-if (require.main === module) app.listen(PORT, () => console.log(`Firebase API listening on port ${PORT}`));
+if (process.env.NODE_ENV !== "production") {
+  app.listen(PORT, () => console.log(`Firebase API listening on port ${PORT}`));
+}
 
-// backend/firebase-server.js
-//const express = require('express');
-//const app = express();
-
-// ... your middleware and routes ...
-
-module.exports = app;
+export default app;
