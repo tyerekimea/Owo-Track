@@ -1,7 +1,8 @@
-const { cert, getApps, initializeApp } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
-const { getStorage } = require("firebase-admin/storage");
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } = require("firebase-admin/firestore"); // ESM import syntax:
+import { getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 
 function getServiceAccount() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
@@ -27,4 +28,4 @@ const firestore = getFirestore(app);
 const storage = getStorage(app).bucket();
 const auth = getAuth(app);
 
-module.exports = { app, auth, firestore, storage };
+export { app, auth, firestore, storage };
