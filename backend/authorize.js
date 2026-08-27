@@ -28,6 +28,17 @@ function canApprove(user, expense) {
   return canAccess(user, expense) && expense.user_id !== user.id && ["manager", "admin"].includes(user.role);
 }
 
+/**
+ * Filters an organization's user list down to what the requester should see:
+ * admins see everyone in the org, managers see only their own team.
+ */
+function scopeUsers(requester, orgUsers) {
+  if (requester.role === "manager") {
+    return orgUsers.filter((u) => u.team_id === requester.team_id);
+  }
+  return orgUsers;
+}
+
 /** Express middleware: rejects unless req.user's role meets the given minimum. */
 function requireRole(role) {
   return (req, res, next) => {
@@ -39,4 +50,4 @@ function requireRole(role) {
   };
 }
 
-export { ROLE_RANK, userScope, canAccess, canApprove, requireRole };
+export { ROLE_RANK, userScope, canAccess, canApprove, scopeUsers, requireRole };

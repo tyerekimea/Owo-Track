@@ -105,9 +105,9 @@ export default function App() {
     ];
     if (user.role === "manager" || user.role === "admin") {
       requests.push(apiFetch("/api/expenses/pending-approval"));
+      requests.push(apiFetch("/api/users"));
     }
     if (user.role === "admin") {
-      requests.push(apiFetch("/api/users"));
       requests.push(apiFetch("/api/teams"));
     }
     const [catsRes, expRes, sumRes, pendingRes, usersRes, teamsRes] = await Promise.all(requests);
@@ -757,6 +757,27 @@ export default function App() {
               ))}
             </div>
           )}
+        </section>
+      )}
+
+      {user.role === "manager" && (
+        <section className="admin-card user-management-card">
+          <div className="list-header">
+            <h3>My team ({adminUsers.length})</h3>
+            <span className="section-note">Read-only — team membership is managed by an admin.</span>
+          </div>
+          <div className="admin-user-list">
+            {adminUsers.map((teamMember) => (
+              <div className="admin-user-row read-only" key={teamMember.id}>
+                <div>
+                  <strong>{teamMember.name}</strong>
+                  <span>{teamMember.email}</span>
+                </div>
+                <span className="role-badge">{teamMember.role}</span>
+              </div>
+            ))}
+            {adminUsers.length === 0 && <p className="empty">No one else is on your team yet.</p>}
+          </div>
         </section>
       )}
 

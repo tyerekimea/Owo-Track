@@ -60,6 +60,15 @@ const ADMIN_PROFILE = {
   role: "admin",
 };
 
+const MANAGER_PROFILE = {
+  id: "u1",
+  name: "Grace Hopper",
+  email: "grace@owo.com",
+  organization_id: "org-1",
+  team_id: "team-1",
+  role: "manager",
+};
+
 /** Answers the endpoints App.jsx calls, based on URL + method. */
 function mockFetch(overrides = {}) {
   return vi.fn((url, options = {}) => {
@@ -154,6 +163,28 @@ describe("App auth flow", () => {
     const registerCall = global.fetch.mock.calls.find(([url]) => url === `${API_URL}/api/auth/register`);
     expect(registerCall).toBeTruthy();
     expect(signInWithEmailAndPassword).toHaveBeenCalledWith(auth, "ada@owo.com", "password123");
+  });
+
+  it("shows a manager their team as a read-only list", async () => {
+    global.fetch = mockFetch({
+      "GET /api/auth/me": () => jsonResponse({ user: MANAGER_PROFILE }),
+      "GET /api/users": () =>
+        jsonResponse([
+          { id: "emp-1", name: "Ivy Employee", email: "ivy@owo.com", role: "employee", team_id: "team-1" },
+        ]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Owo Track" });
+    await user.type(screen.getByLabelText("Email"), "grace@owo.com");
+    await user.type(screen.getByLabelText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByText("My team (1)")).toBeInTheDocument();
+    expect(screen.getByText("Ivy Employee")).toBeInTheDocument();
+    // Read-only: no role/team <select> for a manager to edit their teammate with.
+    expect(screen.queryByLabelText(/Role for Ivy Employee/)).not.toBeInTheDocument();
   });
 
   it("shows an error message when login fails", async () => {

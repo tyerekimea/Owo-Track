@@ -346,6 +346,19 @@ h2::before {
   color: var(--text-muted);
   font-size: 0.75rem;
 }
+.admin-user-row.read-only {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.role-badge {
+  justify-self: end;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--sky-tint);
+  color: var(--sky-dark);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
 
 .form-section, .list-section {
   background: var(--card);

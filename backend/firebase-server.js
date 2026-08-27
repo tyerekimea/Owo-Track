@@ -7,7 +7,7 @@ import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { auth, firestore, storage } from "./firebase-admin.js";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
-import { userScope, canAccess, canApprove, requireRole } from "./authorize.js";
+import { userScope, canAccess, canApprove, scopeUsers, requireRole } from "./authorize.js";
 import { createRateLimiter } from "./rateLimit.js";
 
 const app = express();
@@ -105,7 +105,10 @@ app.post("/api/teams", authenticate, requireRole("admin"), async (req, res) => {
   res.status(201).json({ id: ref.id, ...team });
 });
 
-app.get("/api/users", authenticate, requireRole("admin"), async (req, res) => res.json((await readDocs(users().where("organization_id", "==", req.user.organization_id))).sort((a, b) => a.name.localeCompare(b.name)).map(serialize)));
+app.get("/api/users", authenticate, requireRole("manager"), async (req, res) => {
+  const orgUsers = await readDocs(users().where("organization_id", "==", req.user.organization_id));
+  res.json(scopeUsers(req.user, orgUsers).sort((a, b) => a.name.localeCompare(b.name)).map(serialize));
+});
 app.post("/api/users", authenticate, requireRole("admin"), async (req, res) => {
   const { name, email, password, role = "employee", team_id = null } = req.body || {};
   if (!name || !email || !password || !["employee", "manager"].includes(role)) return res.status(400).json({ error: "Valid name, email, password, and role are required." });

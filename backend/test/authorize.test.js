@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { userScope, canAccess, canApprove, requireRole } from "../authorize.js";
+import { userScope, canAccess, canApprove, scopeUsers, requireRole } from "../authorize.js";
 
 const admin = { id: "admin-1", role: "admin", organization_id: "org-1", team_id: "team-a" };
 const manager = { id: "mgr-1", role: "manager", organization_id: "org-1", team_id: "team-a" };
@@ -57,6 +57,23 @@ test("employees can never approve, even an accessible expense", () => {
 
 test("manager cannot approve an expense outside their team", () => {
   assert.equal(canApprove(manager, otherTeamExpense), false);
+});
+
+test("scopeUsers gives an admin the entire organization's users", () => {
+  const orgUsers = [
+    { id: "emp-1", team_id: "team-a" },
+    { id: "emp-2", team_id: "team-b" },
+    { id: "mgr-1", team_id: "team-a" },
+  ];
+  assert.deepEqual(scopeUsers(admin, orgUsers), orgUsers);
+});
+
+test("scopeUsers restricts a manager to only their own team", () => {
+  const teammate = { id: "emp-1", team_id: "team-a" };
+  const otherTeamPerson = { id: "emp-2", team_id: "team-b" };
+  const orgUsers = [teammate, otherTeamPerson];
+
+  assert.deepEqual(scopeUsers(manager, orgUsers), [teammate]);
 });
 
 function mockReqRes(role) {
