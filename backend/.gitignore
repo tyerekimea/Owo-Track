@@ -3,3 +3,4 @@ node_modules
 *.db
 uploads/*
 !uploads/.gitkeep
+*firebase-adminsdk*.json

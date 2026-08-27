@@ -7,6 +7,8 @@ import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { auth, firestore, storage } from "./firebase-admin.js";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { userScope, canAccess, canApprove, requireRole } from "./authorize.js";
+import { createRateLimiter } from "./rateLimit.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -15,6 +17,14 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173").spli
 
 app.use(cors({ origin: (origin, cb) => (!origin || allowedOrigins.includes(origin) ? cb(null, true) : cb(new Error("Not allowed by CORS"))), credentials: true }));
 app.use(express.json({ limit: "10mb" }));
+app.set("trust proxy", true);
+
+const registerLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  scope: "register",
+  message: "Too many accounts created from this connection. Please try again later.",
+});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -37,13 +47,6 @@ function publicUser(user) {
   return { id: user.id, name: user.name, email: user.email, organization_id: user.organization_id, team_id: user.team_id || null, role: user.role || "employee" };
 }
 function now() { return new Date().toISOString(); }
-function userScope(user) {
-  return user.role === "admin" ? (expense) => expense.organization_id === user.organization_id
-    : user.role === "manager" ? (expense) => expense.organization_id === user.organization_id && expense.team_id === user.team_id
-      : (expense) => expense.user_id === user.id;
-}
-function canAccess(user, expense) { return userScope(user)(expense); }
-function canApprove(user, expense) { return canAccess(user, expense) && expense.user_id !== user.id && ["manager", "admin"].includes(user.role); }
 
 async function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
@@ -57,10 +60,6 @@ async function authenticate(req, res, next) {
     next();
   } catch { return res.status(401).json({ error: "Invalid authentication token." }); }
 }
-function requireRole(role) {
-  const ranks = { employee: 0, manager: 1, admin: 2 };
-  return (req, res, next) => ranks[req.user?.role] >= ranks[role] ? next() : res.status(403).json({ error: "Insufficient permissions" });
-}
 async function readDocs(query) { const snapshot = await query.get(); return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })); }
 async function getExpense(req, id) {
   const snapshot = await expenses(req.user.organization_id).doc(id).get();
@@ -72,7 +71,7 @@ async function writeHistory(user, expense, action, fromStatus, toStatus, comment
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", registerLimiter, async (req, res) => {
   const { name, email, password } = req.body || {};
   if (!String(name || "").trim() || !email || !password || String(password).length < 6) return res.status(400).json({ error: "Name, valid email, and a password of at least 6 characters are required." });
   try {
