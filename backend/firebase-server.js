@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { auth, firestore, storage } from "./firebase-admin.js";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { userScope, canAccess, canApprove, scopeUsers, requireRole } from "./authorize.js";
+import { isBudgetCountable } from "./expenseRules.js";
 import { createRateLimiter } from "./rateLimit.js";
 
 const app = express();
@@ -196,7 +197,7 @@ app.post("/api/expenses/:id/return", authenticate, requireRole("manager"), (req,
 app.get("/api/budgets", authenticate, async (req, res) => { const result = {}; for (const budget of await readDocs(budgets(req.user.organization_id))) result[budget.id] = budget.monthly_limit; res.json(result); });
 app.put("/api/budgets/:category", authenticate, requireRole("admin"), async (req, res) => { const value = Number(req.body?.monthly_limit); if (!CATEGORIES.includes(req.params.category) || Number.isNaN(value) || value < 0) return res.status(400).json({ error: "Invalid budget." }); await budgets(req.user.organization_id).doc(req.params.category).set({ category: req.params.category, monthly_limit: value }); res.json({ category: req.params.category, monthly_limit: value }); });
 app.delete("/api/budgets/:category", authenticate, requireRole("admin"), async (req, res) => { await budgets(req.user.organization_id).doc(req.params.category).delete(); res.status(204).send(); });
-app.get("/api/summary", authenticate, async (req, res) => { const all = (await readDocs(expenses(req.user.organization_id))).filter(userScope(req.user)); const totalsByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category).reduce((sum, e) => sum + Number(e.amount), 0)])); const month = new Date().toISOString().slice(0, 7); const monthSpentByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category && String(e.date).startsWith(month)).reduce((sum, e) => sum + Number(e.amount), 0)])); const budgetRows = await readDocs(budgets(req.user.organization_id)); res.json({ totalsByCategory, grandTotal: all.reduce((sum, e) => sum + Number(e.amount), 0), count: all.length, month, monthSpentByCategory, budgets: Object.fromEntries(budgetRows.map((b) => [b.id, b.monthly_limit])) }); });
+app.get("/api/summary", authenticate, async (req, res) => { const all = (await readDocs(expenses(req.user.organization_id))).filter(userScope(req.user)); const totalsByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category).reduce((sum, e) => sum + Number(e.amount), 0)])); const month = new Date().toISOString().slice(0, 7); const monthSpentByCategory = Object.fromEntries(CATEGORIES.map((category) => [category, all.filter((e) => e.category === category && String(e.date).startsWith(month) && isBudgetCountable(e)).reduce((sum, e) => sum + Number(e.amount), 0)])); const budgetRows = await readDocs(budgets(req.user.organization_id)); res.json({ totalsByCategory, grandTotal: all.reduce((sum, e) => sum + Number(e.amount), 0), count: all.length, month, monthSpentByCategory, budgets: Object.fromEntries(budgetRows.map((b) => [b.id, b.monthly_limit])) }); });
 
 if (process.env.NODE_ENV !== "production") {
   app.listen(PORT, () => console.log(`Firebase API listening on port ${PORT}`));
