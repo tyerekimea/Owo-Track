@@ -47,6 +47,11 @@ function publicUser(user) {
   return { id: user.id, name: user.name, email: user.email, organization_id: user.organization_id, team_id: user.team_id || null, role: user.role || "employee" };
 }
 function now() { return new Date().toISOString(); }
+async function getTeamName(orgId, teamId) {
+  if (!teamId) return null;
+  const snap = await teams(orgId).doc(teamId).get();
+  return snap.exists ? snap.data().name : null;
+}
 
 async function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
@@ -89,7 +94,10 @@ app.post("/api/auth/register", registerLimiter, async (req, res) => {
   } catch (error) { res.status(error.code === "auth/email-already-exists" ? 409 : 400).json({ error: error.message }); }
 });
 
-app.get("/api/auth/me", authenticate, (req, res) => res.json({ user: publicUser(req.user) }));
+app.get("/api/auth/me", authenticate, async (req, res) => {
+  const team_name = await getTeamName(req.user.organization_id, req.user.team_id);
+  res.json({ user: { ...publicUser(req.user), team_name } });
+});
 app.post("/api/auth/login", (_req, res) => res.status(410).json({ error: "Sign in through Firebase Authentication." }));
 app.post("/api/auth/logout", (_req, res) => res.status(204).send());
 app.get("/api/categories", authenticate, (_req, res) => res.json(CATEGORIES));
@@ -146,7 +154,7 @@ app.get("/api/expenses", authenticate, async (req, res) => {
 app.post("/api/expenses", authenticate, async (req, res) => {
   const { amount, category, description = "", vendor = "", date = new Date().toISOString().slice(0, 10) } = req.body || {};
   if (!amount || Number.isNaN(Number(amount)) || Number(amount) <= 0 || !CATEGORIES.includes(category)) return res.status(400).json({ error: "A valid positive amount and category are required." });
-  const expense = { user_id: req.user.id, organization_id: req.user.organization_id, team_id: req.user.team_id || null, created_by: req.user.id, amount: Number(amount), category, description, vendor, date, status: "draft", submitted_at: null, submitted_by: null, approved_at: null, approved_by: null, rejected_at: null, rejected_by: null, rejection_reason: "", attachment_name: "", attachment_url: "" };
+  const expense = { user_id: req.user.id, user_name: req.user.name, organization_id: req.user.organization_id, team_id: req.user.team_id || null, created_by: req.user.id, amount: Number(amount), category, description, vendor, date, status: "draft", submitted_at: null, submitted_by: null, approved_at: null, approved_by: null, rejected_at: null, rejected_by: null, rejection_reason: "", attachment_name: "", attachment_url: "" };
   const ref = await expenses(req.user.organization_id).add(expense); res.status(201).json({ id: ref.id, ...expense });
 });
 

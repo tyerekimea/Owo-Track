@@ -187,6 +187,110 @@ describe("App auth flow", () => {
     expect(screen.queryByLabelText(/Role for Ivy Employee/)).not.toBeInTheDocument();
   });
 
+  it("shows the user's assigned team name in the dashboard header", async () => {
+    global.fetch = mockFetch({
+      "GET /api/auth/me": () => jsonResponse({ user: { ...ADMIN_PROFILE, team_name: "General" } }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Owo Track" });
+    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
+    await user.type(screen.getByLabelText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    await screen.findByText(/Welcome, Ada Lovelace/);
+    expect(screen.getByText(/General/)).toBeInTheDocument();
+  });
+
+  it("shows the submitter's short name on a pending-approval item", async () => {
+    global.fetch = mockFetch({
+      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
+      "GET /api/expenses/pending-approval": () =>
+        jsonResponse([
+          {
+            id: "exp-1",
+            user_name: "Ivy Solomon",
+            category: "Rent",
+            amount: 5000,
+            vendor: "Landlord",
+            date: "2026-01-05",
+            status: "submitted",
+          },
+        ]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Owo Track" });
+    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
+    await user.type(screen.getByLabelText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByText(/I\.Solomon/)).toBeInTheDocument();
+  });
+
+  it("shows the rejection reason on the expense owner's own row", async () => {
+    global.fetch = mockFetch({
+      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
+      "GET /api/expenses?limit=50": () =>
+        jsonResponse({
+          items: [
+            {
+              id: "exp-1",
+              category: "Rent",
+              vendor: "Landlord",
+              description: "",
+              date: "2026-01-05",
+              amount: 5000,
+              status: "rejected",
+              rejection_reason: "Missing receipt",
+              user_id: "u1",
+            },
+          ],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Owo Track" });
+    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
+    await user.type(screen.getByLabelText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByText(/Missing receipt/)).toBeInTheDocument();
+  });
+
+  it("shows admin's organization users read-only by default, with an Edit button that reveals controls", async () => {
+    global.fetch = mockFetch({
+      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
+      "GET /api/users": () =>
+        jsonResponse([
+          { id: "emp-1", name: "Ivy Solomon", email: "ivy@owo.com", role: "employee", team_id: "team-1" },
+        ]),
+      "GET /api/teams": () => jsonResponse([{ id: "team-1", name: "General" }]),
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Owo Track" });
+    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
+    await user.type(screen.getByLabelText("Password"), "password123");
+    await user.click(screen.getByRole("button", { name: "Log in" }));
+
+    await screen.findByText("Ivy Solomon");
+    // Read-only by default: no editable role/team <select> yet.
+    expect(screen.queryByLabelText(/Role for Ivy Solomon/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Edit Ivy Solomon" }));
+
+    expect(screen.getByLabelText(/Role for Ivy Solomon/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Team for Ivy Solomon/)).toBeInTheDocument();
+  });
+
   it("shows an error message when login fails", async () => {
     signInWithEmailAndPassword.mockRejectedValueOnce(new Error("Invalid email or password."));
     const user = userEvent.setup();

@@ -36,6 +36,14 @@ async function apiFetch(path, options = {}) {
   return response.json();
 }
 
+/** "Ada Solomon" -> "A.Solomon". Falls back to the name as-is if it's a single word. */
+function formatShortName(name) {
+  if (!name) return "";
+  const parts = String(name).trim().split(/\s+/);
+  if (parts.length < 2) return parts[0] || "";
+  return `${parts[0][0].toUpperCase()}.${parts[parts.length - 1]}`;
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -52,6 +60,7 @@ export default function App() {
   const [newTeamName, setNewTeamName] = useState("");
   const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "employee", team_id: "" });
   const [adminError, setAdminError] = useState("");
+  const [editingUserId, setEditingUserId] = useState(null);
   const EXPENSES_PAGE_SIZE = 50;
   const [summary, setSummary] = useState({
     totalsByCategory: {},
@@ -451,7 +460,10 @@ export default function App() {
         <div>
           <h1>Owo Track</h1>
           <p className="subtitle">Welcome, {user?.name || "there"}</p>
-          <p className="role-label">{user?.role || "employee"}</p>
+          <p className="role-label">
+            {user?.role || "employee"}
+            {user?.team_name && <span className="team-label"> · {user.team_name}</span>}
+          </p>
         </div>
         <button className="logout-button" onClick={handleLogout}>Log out</button>
       </header>
@@ -567,31 +579,55 @@ export default function App() {
                 <span className="section-note">Managers approve only expenses from their selected team.</span>
               </div>
               <div className="admin-user-list">
-                {adminUsers.map((managedUser) => (
-                  <div className="admin-user-row" key={managedUser.id}>
-                    <div>
-                      <strong>{managedUser.name}</strong>
-                      <span>{managedUser.email}</span>
+                {adminUsers.map((managedUser) => {
+                  const isEditing = editingUserId === managedUser.id;
+                  const teamName = adminTeams.find((t) => t.id === managedUser.team_id)?.name;
+                  return (
+                    <div className="admin-user-row" key={managedUser.id}>
+                      <div>
+                        <strong>{managedUser.name}</strong>
+                        <span>{managedUser.email}</span>
+                      </div>
+                      {isEditing ? (
+                        <>
+                          <select
+                            value={managedUser.role}
+                            disabled={managedUser.id === user.id}
+                            onChange={(e) => handleRoleChange(managedUser.id, e.target.value)}
+                            aria-label={`Role for ${managedUser.name}`}
+                          >
+                            <option value="employee">Employee</option>
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                          <select
+                            value={managedUser.team_id || ""}
+                            onChange={(e) => handleTeamChange(managedUser.id, e.target.value)}
+                            aria-label={`Team for ${managedUser.name}`}
+                          >
+                            {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+                          </select>
+                          <button type="button" className="edit-user-toggle" onClick={() => setEditingUserId(null)}>
+                            Done
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="role-badge">{managedUser.role}</span>
+                          <span className="team-badge">{teamName || "No team"}</span>
+                          <button
+                            type="button"
+                            className="edit-user-toggle"
+                            onClick={() => setEditingUserId(managedUser.id)}
+                            aria-label={`Edit ${managedUser.name}`}
+                          >
+                            Edit
+                          </button>
+                        </>
+                      )}
                     </div>
-                    <select
-                      value={managedUser.role}
-                      disabled={managedUser.id === user.id}
-                      onChange={(e) => handleRoleChange(managedUser.id, e.target.value)}
-                      aria-label={`Role for ${managedUser.name}`}
-                    >
-                      <option value="employee">Employee</option>
-                      <option value="manager">Manager</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    <select
-                      value={managedUser.team_id || ""}
-                      onChange={(e) => handleTeamChange(managedUser.id, e.target.value)}
-                      aria-label={`Team for ${managedUser.name}`}
-                    >
-                      {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
-                    </select>
-                  </div>
-                ))}
+                  );
+                })}
                 {adminUsers.length === 0 && <p className="empty">No organization users found.</p>}
               </div>
             </div>
@@ -745,7 +781,9 @@ export default function App() {
                 <div className="approval-item" key={expense.id}>
                   <div>
                     <strong>{expense.category} — ₦{expense.amount.toLocaleString()}</strong>
-                    <span>{expense.vendor || "No vendor"} · {expense.date}</span>
+                    <span>
+                      {formatShortName(expense.user_name)} · {expense.vendor || "No vendor"} · {expense.date}
+                    </span>
                     {expense.description && <span>{expense.description}</span>}
                   </div>
                   <div className="approval-actions">
@@ -799,6 +837,7 @@ export default function App() {
               <th>Vendor</th>
               <th>Description</th>
               <th>Amount</th>
+              {user.role !== "employee" && <th>Submitted by</th>}
               <th>Status</th>
               <th></th>
             </tr>
@@ -806,7 +845,7 @@ export default function App() {
           <tbody>
             {expenses.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty">No expenses recorded yet.</td>
+                <td colSpan={user.role !== "employee" ? 8 : 7} className="empty">No expenses recorded yet.</td>
               </tr>
             )}
             {expenses.map((e) => (
@@ -829,7 +868,13 @@ export default function App() {
                     )}
                   </div>
                 </td>
-                <td><span className={`status-badge status-${e.status || "draft"}`}>{e.status || "draft"}</span></td>
+                {user.role !== "employee" && <td>{formatShortName(e.user_name)}</td>}
+                <td>
+                  <span className={`status-badge status-${e.status || "draft"}`}>{e.status || "draft"}</span>
+                  {e.status === "rejected" && e.rejection_reason && (
+                    <div className="rejection-note">Reason: {e.rejection_reason}</div>
+                  )}
+                </td>
                 <td>
                   {e.status === "draft" && e.user_id === user.id && (
                     <>

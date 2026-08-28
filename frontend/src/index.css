@@ -331,7 +331,7 @@ h2::before {
 }
 .admin-user-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px 160px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.65rem;
   padding: 0.55rem 0;
@@ -358,6 +358,31 @@ h2::before {
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: capitalize;
+}
+.team-badge {
+  justify-self: end;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--olive-tint);
+  color: var(--olive-dark);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.edit-user-toggle {
+  background: transparent;
+  border: 1px solid var(--sky);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  color: var(--sky-dark);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.edit-user-toggle:hover {
+  background: var(--sky);
+  color: #fff;
 }
 
 .form-section, .list-section {
@@ -524,6 +549,17 @@ tbody tr:last-child td { border-bottom: none; }
 .status-approved { background: #dff4e5; color: #1f6a35; }
 .status-rejected { background: var(--danger-tint); color: var(--danger); }
 .status-paid { background: var(--sky-tint); color: var(--sky-dark); }
+
+.team-label {
+  font-weight: 500;
+  text-transform: none;
+}
+.rejection-note {
+  margin-top: 0.3rem;
+  color: var(--danger);
+  font-size: 0.72rem;
+  max-width: 220px;
+}
 
 @media (max-width: 700px) {
   .admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }

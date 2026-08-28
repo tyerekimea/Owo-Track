@@ -1,0 +1,206 @@
+diff --git a/backend/authorize.js b/backend/authorize.js
+index d808367..25441e5 100644
+--- a/backend/authorize.js
++++ b/backend/authorize.js
+@@ -28,6 +28,17 @@ function canApprove(user, expense) {
+   return canAccess(user, expense) && expense.user_id !== user.id && ["manager", "admin"].includes(user.role);
+ }
+ 
++/**
++ * Filters an organization's user list down to what the requester should see:
++ * admins see everyone in the org, managers see only their own team.
++ */
++function scopeUsers(requester, orgUsers) {
++  if (requester.role === "manager") {
++    return orgUsers.filter((u) => u.team_id === requester.team_id);
++  }
++  return orgUsers;
++}
++
+ /** Express middleware: rejects unless req.user's role meets the given minimum. */
+ function requireRole(role) {
+   return (req, res, next) => {
+@@ -39,4 +50,4 @@ function requireRole(role) {
+   };
+ }
+ 
+-export { ROLE_RANK, userScope, canAccess, canApprove, requireRole };
++export { ROLE_RANK, userScope, canAccess, canApprove, scopeUsers, requireRole };
+diff --git a/backend/firebase-server.js b/backend/firebase-server.js
+index 61fc094..4611068 100644
+--- a/backend/firebase-server.js
++++ b/backend/firebase-server.js
+@@ -7,7 +7,7 @@ import multer from "multer";
+ import { randomUUID } from "node:crypto";
+ import { auth, firestore, storage } from "./firebase-admin.js";
+ import { FieldValue, Timestamp } from "firebase-admin/firestore";
+-import { userScope, canAccess, canApprove, requireRole } from "./authorize.js";
++import { userScope, canAccess, canApprove, scopeUsers, requireRole } from "./authorize.js";
+ import { createRateLimiter } from "./rateLimit.js";
+ 
+ const app = express();
+@@ -105,7 +105,10 @@ app.post("/api/teams", authenticate, requireRole("admin"), async (req, res) => {
+   res.status(201).json({ id: ref.id, ...team });
+ });
+ 
+-app.get("/api/users", authenticate, requireRole("admin"), async (req, res) => res.json((await readDocs(users().where("organization_id", "==", req.user.organization_id))).sort((a, b) => a.name.localeCompare(b.name)).map(serialize)));
++app.get("/api/users", authenticate, requireRole("manager"), async (req, res) => {
++  const orgUsers = await readDocs(users().where("organization_id", "==", req.user.organization_id));
++  res.json(scopeUsers(req.user, orgUsers).sort((a, b) => a.name.localeCompare(b.name)).map(serialize));
++});
+ app.post("/api/users", authenticate, requireRole("admin"), async (req, res) => {
+   const { name, email, password, role = "employee", team_id = null } = req.body || {};
+   if (!name || !email || !password || !["employee", "manager"].includes(role)) return res.status(400).json({ error: "Valid name, email, password, and role are required." });
+diff --git a/backend/test/authorize.test.js b/backend/test/authorize.test.js
+index fad81fb..8d16fe4 100644
+--- a/backend/test/authorize.test.js
++++ b/backend/test/authorize.test.js
+@@ -1,7 +1,7 @@
+ import test from "node:test";
+ import assert from "node:assert/strict";
+ 
+-import { userScope, canAccess, canApprove, requireRole } from "../authorize.js";
++import { userScope, canAccess, canApprove, scopeUsers, requireRole } from "../authorize.js";
+ 
+ const admin = { id: "admin-1", role: "admin", organization_id: "org-1", team_id: "team-a" };
+ const manager = { id: "mgr-1", role: "manager", organization_id: "org-1", team_id: "team-a" };
+@@ -59,6 +59,23 @@ test("manager cannot approve an expense outside their team", () => {
+   assert.equal(canApprove(manager, otherTeamExpense), false);
+ });
+ 
++test("scopeUsers gives an admin the entire organization's users", () => {
++  const orgUsers = [
++    { id: "emp-1", team_id: "team-a" },
++    { id: "emp-2", team_id: "team-b" },
++    { id: "mgr-1", team_id: "team-a" },
++  ];
++  assert.deepEqual(scopeUsers(admin, orgUsers), orgUsers);
++});
++
++test("scopeUsers restricts a manager to only their own team", () => {
++  const teammate = { id: "emp-1", team_id: "team-a" };
++  const otherTeamPerson = { id: "emp-2", team_id: "team-b" };
++  const orgUsers = [teammate, otherTeamPerson];
++
++  assert.deepEqual(scopeUsers(manager, orgUsers), [teammate]);
++});
++
+ function mockReqRes(role) {
+   const req = { user: role ? { role } : null };
+   const res = {
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 4085f4e..061f37b 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -105,9 +105,9 @@ export default function App() {
+     ];
+     if (user.role === "manager" || user.role === "admin") {
+       requests.push(apiFetch("/api/expenses/pending-approval"));
++      requests.push(apiFetch("/api/users"));
+     }
+     if (user.role === "admin") {
+-      requests.push(apiFetch("/api/users"));
+       requests.push(apiFetch("/api/teams"));
+     }
+     const [catsRes, expRes, sumRes, pendingRes, usersRes, teamsRes] = await Promise.all(requests);
+@@ -760,6 +760,27 @@ export default function App() {
+         </section>
+       )}
+ 
++      {user.role === "manager" && (
++        <section className="admin-card user-management-card">
++          <div className="list-header">
++            <h3>My team ({adminUsers.length})</h3>
++            <span className="section-note">Read-only — team membership is managed by an admin.</span>
++          </div>
++          <div className="admin-user-list">
++            {adminUsers.map((teamMember) => (
++              <div className="admin-user-row read-only" key={teamMember.id}>
++                <div>
++                  <strong>{teamMember.name}</strong>
++                  <span>{teamMember.email}</span>
++                </div>
++                <span className="role-badge">{teamMember.role}</span>
++              </div>
++            ))}
++            {adminUsers.length === 0 && <p className="empty">No one else is on your team yet.</p>}
++          </div>
++        </section>
++      )}
++
+       <section className="list-section">
+         <div className="list-header">
+           <h2>Expenses ({expensesTotal})</h2>
+diff --git a/frontend/src/App.test.jsx b/frontend/src/App.test.jsx
+index a48dbfc..4277486 100644
+--- a/frontend/src/App.test.jsx
++++ b/frontend/src/App.test.jsx
+@@ -60,6 +60,15 @@ const ADMIN_PROFILE = {
+   role: "admin",
+ };
+ 
++const MANAGER_PROFILE = {
++  id: "u1",
++  name: "Grace Hopper",
++  email: "grace@owo.com",
++  organization_id: "org-1",
++  team_id: "team-1",
++  role: "manager",
++};
++
+ /** Answers the endpoints App.jsx calls, based on URL + method. */
+ function mockFetch(overrides = {}) {
+   return vi.fn((url, options = {}) => {
+@@ -156,6 +165,28 @@ describe("App auth flow", () => {
+     expect(signInWithEmailAndPassword).toHaveBeenCalledWith(auth, "ada@owo.com", "password123");
+   });
+ 
++  it("shows a manager their team as a read-only list", async () => {
++    global.fetch = mockFetch({
++      "GET /api/auth/me": () => jsonResponse({ user: MANAGER_PROFILE }),
++      "GET /api/users": () =>
++        jsonResponse([
++          { id: "emp-1", name: "Ivy Employee", email: "ivy@owo.com", role: "employee", team_id: "team-1" },
++        ]),
++    });
++    const user = userEvent.setup();
++    render(<App />);
++
++    await screen.findByRole("heading", { name: "Owo Track" });
++    await user.type(screen.getByLabelText("Email"), "grace@owo.com");
++    await user.type(screen.getByLabelText("Password"), "password123");
++    await user.click(screen.getByRole("button", { name: "Log in" }));
++
++    expect(await screen.findByText("My team (1)")).toBeInTheDocument();
++    expect(screen.getByText("Ivy Employee")).toBeInTheDocument();
++    // Read-only: no role/team <select> for a manager to edit their teammate with.
++    expect(screen.queryByLabelText(/Role for Ivy Employee/)).not.toBeInTheDocument();
++  });
++
+   it("shows an error message when login fails", async () => {
+     signInWithEmailAndPassword.mockRejectedValueOnce(new Error("Invalid email or password."));
+     const user = userEvent.setup();
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 97b5e03..b60a251 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -346,6 +346,19 @@ h2::before {
+   color: var(--text-muted);
+   font-size: 0.75rem;
+ }
++.admin-user-row.read-only {
++  grid-template-columns: minmax(0, 1fr) auto;
++}
++.role-badge {
++  justify-self: end;
++  padding: 0.2rem 0.6rem;
++  border-radius: 999px;
++  background: var(--sky-tint);
++  color: var(--sky-dark);
++  font-size: 0.72rem;
++  font-weight: 600;
++  text-transform: capitalize;
++}
+ 
+ .form-section, .list-section {
+   background: var(--card);

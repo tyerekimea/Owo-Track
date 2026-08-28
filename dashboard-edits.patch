@@ -1,0 +1,377 @@
+diff --git a/backend/firebase-server.js b/backend/firebase-server.js
+index 4611068..a05e29b 100644
+--- a/backend/firebase-server.js
++++ b/backend/firebase-server.js
+@@ -47,6 +47,11 @@ function publicUser(user) {
+   return { id: user.id, name: user.name, email: user.email, organization_id: user.organization_id, team_id: user.team_id || null, role: user.role || "employee" };
+ }
+ function now() { return new Date().toISOString(); }
++async function getTeamName(orgId, teamId) {
++  if (!teamId) return null;
++  const snap = await teams(orgId).doc(teamId).get();
++  return snap.exists ? snap.data().name : null;
++}
+ 
+ async function authenticate(req, res, next) {
+   const header = req.headers.authorization || "";
+@@ -89,7 +94,10 @@ app.post("/api/auth/register", registerLimiter, async (req, res) => {
+   } catch (error) { res.status(error.code === "auth/email-already-exists" ? 409 : 400).json({ error: error.message }); }
+ });
+ 
+-app.get("/api/auth/me", authenticate, (req, res) => res.json({ user: publicUser(req.user) }));
++app.get("/api/auth/me", authenticate, async (req, res) => {
++  const team_name = await getTeamName(req.user.organization_id, req.user.team_id);
++  res.json({ user: { ...publicUser(req.user), team_name } });
++});
+ app.post("/api/auth/login", (_req, res) => res.status(410).json({ error: "Sign in through Firebase Authentication." }));
+ app.post("/api/auth/logout", (_req, res) => res.status(204).send());
+ app.get("/api/categories", authenticate, (_req, res) => res.json(CATEGORIES));
+@@ -146,7 +154,7 @@ app.get("/api/expenses", authenticate, async (req, res) => {
+ app.post("/api/expenses", authenticate, async (req, res) => {
+   const { amount, category, description = "", vendor = "", date = new Date().toISOString().slice(0, 10) } = req.body || {};
+   if (!amount || Number.isNaN(Number(amount)) || Number(amount) <= 0 || !CATEGORIES.includes(category)) return res.status(400).json({ error: "A valid positive amount and category are required." });
+-  const expense = { user_id: req.user.id, organization_id: req.user.organization_id, team_id: req.user.team_id || null, created_by: req.user.id, amount: Number(amount), category, description, vendor, date, status: "draft", submitted_at: null, submitted_by: null, approved_at: null, approved_by: null, rejected_at: null, rejected_by: null, rejection_reason: "", attachment_name: "", attachment_url: "" };
++  const expense = { user_id: req.user.id, user_name: req.user.name, organization_id: req.user.organization_id, team_id: req.user.team_id || null, created_by: req.user.id, amount: Number(amount), category, description, vendor, date, status: "draft", submitted_at: null, submitted_by: null, approved_at: null, approved_by: null, rejected_at: null, rejected_by: null, rejection_reason: "", attachment_name: "", attachment_url: "" };
+   const ref = await expenses(req.user.organization_id).add(expense); res.status(201).json({ id: ref.id, ...expense });
+ });
+ 
+diff --git a/frontend/src/App.jsx b/frontend/src/App.jsx
+index 061f37b..70cbc4b 100644
+--- a/frontend/src/App.jsx
++++ b/frontend/src/App.jsx
+@@ -36,6 +36,14 @@ async function apiFetch(path, options = {}) {
+   return response.json();
+ }
+ 
++/** "Ada Solomon" -> "A.Solomon". Falls back to the name as-is if it's a single word. */
++function formatShortName(name) {
++  if (!name) return "";
++  const parts = String(name).trim().split(/\s+/);
++  if (parts.length < 2) return parts[0] || "";
++  return `${parts[0][0].toUpperCase()}.${parts[parts.length - 1]}`;
++}
++
+ export default function App() {
+   const [user, setUser] = useState(null);
+   const [authMode, setAuthMode] = useState("login");
+@@ -52,6 +60,7 @@ export default function App() {
+   const [newTeamName, setNewTeamName] = useState("");
+   const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "employee", team_id: "" });
+   const [adminError, setAdminError] = useState("");
++  const [editingUserId, setEditingUserId] = useState(null);
+   const EXPENSES_PAGE_SIZE = 50;
+   const [summary, setSummary] = useState({
+     totalsByCategory: {},
+@@ -451,7 +460,10 @@ export default function App() {
+         <div>
+           <h1>Owo Track</h1>
+           <p className="subtitle">Welcome, {user?.name || "there"}</p>
+-          <p className="role-label">{user?.role || "employee"}</p>
++          <p className="role-label">
++            {user?.role || "employee"}
++            {user?.team_name && <span className="team-label"> · {user.team_name}</span>}
++          </p>
+         </div>
+         <button className="logout-button" onClick={handleLogout}>Log out</button>
+       </header>
+@@ -567,31 +579,55 @@ export default function App() {
+                 <span className="section-note">Managers approve only expenses from their selected team.</span>
+               </div>
+               <div className="admin-user-list">
+-                {adminUsers.map((managedUser) => (
+-                  <div className="admin-user-row" key={managedUser.id}>
+-                    <div>
+-                      <strong>{managedUser.name}</strong>
+-                      <span>{managedUser.email}</span>
++                {adminUsers.map((managedUser) => {
++                  const isEditing = editingUserId === managedUser.id;
++                  const teamName = adminTeams.find((t) => t.id === managedUser.team_id)?.name;
++                  return (
++                    <div className="admin-user-row" key={managedUser.id}>
++                      <div>
++                        <strong>{managedUser.name}</strong>
++                        <span>{managedUser.email}</span>
++                      </div>
++                      {isEditing ? (
++                        <>
++                          <select
++                            value={managedUser.role}
++                            disabled={managedUser.id === user.id}
++                            onChange={(e) => handleRoleChange(managedUser.id, e.target.value)}
++                            aria-label={`Role for ${managedUser.name}`}
++                          >
++                            <option value="employee">Employee</option>
++                            <option value="manager">Manager</option>
++                            <option value="admin">Admin</option>
++                          </select>
++                          <select
++                            value={managedUser.team_id || ""}
++                            onChange={(e) => handleTeamChange(managedUser.id, e.target.value)}
++                            aria-label={`Team for ${managedUser.name}`}
++                          >
++                            {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
++                          </select>
++                          <button type="button" className="edit-user-toggle" onClick={() => setEditingUserId(null)}>
++                            Done
++                          </button>
++                        </>
++                      ) : (
++                        <>
++                          <span className="role-badge">{managedUser.role}</span>
++                          <span className="team-badge">{teamName || "No team"}</span>
++                          <button
++                            type="button"
++                            className="edit-user-toggle"
++                            onClick={() => setEditingUserId(managedUser.id)}
++                            aria-label={`Edit ${managedUser.name}`}
++                          >
++                            Edit
++                          </button>
++                        </>
++                      )}
+                     </div>
+-                    <select
+-                      value={managedUser.role}
+-                      disabled={managedUser.id === user.id}
+-                      onChange={(e) => handleRoleChange(managedUser.id, e.target.value)}
+-                      aria-label={`Role for ${managedUser.name}`}
+-                    >
+-                      <option value="employee">Employee</option>
+-                      <option value="manager">Manager</option>
+-                      <option value="admin">Admin</option>
+-                    </select>
+-                    <select
+-                      value={managedUser.team_id || ""}
+-                      onChange={(e) => handleTeamChange(managedUser.id, e.target.value)}
+-                      aria-label={`Team for ${managedUser.name}`}
+-                    >
+-                      {adminTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}
+-                    </select>
+-                  </div>
+-                ))}
++                  );
++                })}
+                 {adminUsers.length === 0 && <p className="empty">No organization users found.</p>}
+               </div>
+             </div>
+@@ -745,7 +781,9 @@ export default function App() {
+                 <div className="approval-item" key={expense.id}>
+                   <div>
+                     <strong>{expense.category} — ₦{expense.amount.toLocaleString()}</strong>
+-                    <span>{expense.vendor || "No vendor"} · {expense.date}</span>
++                    <span>
++                      {formatShortName(expense.user_name)} · {expense.vendor || "No vendor"} · {expense.date}
++                    </span>
+                     {expense.description && <span>{expense.description}</span>}
+                   </div>
+                   <div className="approval-actions">
+@@ -799,6 +837,7 @@ export default function App() {
+               <th>Vendor</th>
+               <th>Description</th>
+               <th>Amount</th>
++              {user.role !== "employee" && <th>Submitted by</th>}
+               <th>Status</th>
+               <th></th>
+             </tr>
+@@ -806,7 +845,7 @@ export default function App() {
+           <tbody>
+             {expenses.length === 0 && (
+               <tr>
+-                <td colSpan={7} className="empty">No expenses recorded yet.</td>
++                <td colSpan={user.role !== "employee" ? 8 : 7} className="empty">No expenses recorded yet.</td>
+               </tr>
+             )}
+             {expenses.map((e) => (
+@@ -829,7 +868,13 @@ export default function App() {
+                     )}
+                   </div>
+                 </td>
+-                <td><span className={`status-badge status-${e.status || "draft"}`}>{e.status || "draft"}</span></td>
++                {user.role !== "employee" && <td>{formatShortName(e.user_name)}</td>}
++                <td>
++                  <span className={`status-badge status-${e.status || "draft"}`}>{e.status || "draft"}</span>
++                  {e.status === "rejected" && e.rejection_reason && (
++                    <div className="rejection-note">Reason: {e.rejection_reason}</div>
++                  )}
++                </td>
+                 <td>
+                   {e.status === "draft" && e.user_id === user.id && (
+                     <>
+diff --git a/frontend/src/App.test.jsx b/frontend/src/App.test.jsx
+index 4277486..a518b41 100644
+--- a/frontend/src/App.test.jsx
++++ b/frontend/src/App.test.jsx
+@@ -187,6 +187,110 @@ describe("App auth flow", () => {
+     expect(screen.queryByLabelText(/Role for Ivy Employee/)).not.toBeInTheDocument();
+   });
+ 
++  it("shows the user's assigned team name in the dashboard header", async () => {
++    global.fetch = mockFetch({
++      "GET /api/auth/me": () => jsonResponse({ user: { ...ADMIN_PROFILE, team_name: "General" } }),
++    });
++    const user = userEvent.setup();
++    render(<App />);
++
++    await screen.findByRole("heading", { name: "Owo Track" });
++    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
++    await user.type(screen.getByLabelText("Password"), "password123");
++    await user.click(screen.getByRole("button", { name: "Log in" }));
++
++    await screen.findByText(/Welcome, Ada Lovelace/);
++    expect(screen.getByText(/General/)).toBeInTheDocument();
++  });
++
++  it("shows the submitter's short name on a pending-approval item", async () => {
++    global.fetch = mockFetch({
++      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
++      "GET /api/expenses/pending-approval": () =>
++        jsonResponse([
++          {
++            id: "exp-1",
++            user_name: "Ivy Solomon",
++            category: "Rent",
++            amount: 5000,
++            vendor: "Landlord",
++            date: "2026-01-05",
++            status: "submitted",
++          },
++        ]),
++    });
++    const user = userEvent.setup();
++    render(<App />);
++
++    await screen.findByRole("heading", { name: "Owo Track" });
++    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
++    await user.type(screen.getByLabelText("Password"), "password123");
++    await user.click(screen.getByRole("button", { name: "Log in" }));
++
++    expect(await screen.findByText(/I\.Solomon/)).toBeInTheDocument();
++  });
++
++  it("shows the rejection reason on the expense owner's own row", async () => {
++    global.fetch = mockFetch({
++      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
++      "GET /api/expenses?limit=50": () =>
++        jsonResponse({
++          items: [
++            {
++              id: "exp-1",
++              category: "Rent",
++              vendor: "Landlord",
++              description: "",
++              date: "2026-01-05",
++              amount: 5000,
++              status: "rejected",
++              rejection_reason: "Missing receipt",
++              user_id: "u1",
++            },
++          ],
++          total: 1,
++          limit: 50,
++          offset: 0,
++        }),
++    });
++    const user = userEvent.setup();
++    render(<App />);
++
++    await screen.findByRole("heading", { name: "Owo Track" });
++    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
++    await user.type(screen.getByLabelText("Password"), "password123");
++    await user.click(screen.getByRole("button", { name: "Log in" }));
++
++    expect(await screen.findByText(/Missing receipt/)).toBeInTheDocument();
++  });
++
++  it("shows admin's organization users read-only by default, with an Edit button that reveals controls", async () => {
++    global.fetch = mockFetch({
++      "GET /api/auth/me": () => jsonResponse({ user: ADMIN_PROFILE }),
++      "GET /api/users": () =>
++        jsonResponse([
++          { id: "emp-1", name: "Ivy Solomon", email: "ivy@owo.com", role: "employee", team_id: "team-1" },
++        ]),
++      "GET /api/teams": () => jsonResponse([{ id: "team-1", name: "General" }]),
++    });
++    const user = userEvent.setup();
++    render(<App />);
++
++    await screen.findByRole("heading", { name: "Owo Track" });
++    await user.type(screen.getByLabelText("Email"), "ada@owo.com");
++    await user.type(screen.getByLabelText("Password"), "password123");
++    await user.click(screen.getByRole("button", { name: "Log in" }));
++
++    await screen.findByText("Ivy Solomon");
++    // Read-only by default: no editable role/team <select> yet.
++    expect(screen.queryByLabelText(/Role for Ivy Solomon/)).not.toBeInTheDocument();
++
++    await user.click(screen.getByRole("button", { name: "Edit Ivy Solomon" }));
++
++    expect(screen.getByLabelText(/Role for Ivy Solomon/)).toBeInTheDocument();
++    expect(screen.getByLabelText(/Team for Ivy Solomon/)).toBeInTheDocument();
++  });
++
+   it("shows an error message when login fails", async () => {
+     signInWithEmailAndPassword.mockRejectedValueOnce(new Error("Invalid email or password."));
+     const user = userEvent.setup();
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index b60a251..758d1e2 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -331,7 +331,7 @@ h2::before {
+ }
+ .admin-user-row {
+   display: grid;
+-  grid-template-columns: minmax(0, 1fr) 130px 160px;
++  grid-template-columns: minmax(0, 1fr) auto auto auto;
+   align-items: center;
+   gap: 0.65rem;
+   padding: 0.55rem 0;
+@@ -359,6 +359,31 @@ h2::before {
+   font-weight: 600;
+   text-transform: capitalize;
+ }
++.team-badge {
++  justify-self: end;
++  padding: 0.2rem 0.6rem;
++  border-radius: 999px;
++  background: var(--olive-tint);
++  color: var(--olive-dark);
++  font-size: 0.72rem;
++  font-weight: 600;
++}
++.edit-user-toggle {
++  background: transparent;
++  border: 1px solid var(--sky);
++  border-radius: 999px;
++  padding: 0.3rem 0.75rem;
++  color: var(--sky-dark);
++  font-family: var(--font-body);
++  font-weight: 600;
++  font-size: 0.75rem;
++  cursor: pointer;
++  transition: background 0.15s ease, color 0.15s ease;
++}
++.edit-user-toggle:hover {
++  background: var(--sky);
++  color: #fff;
++}
+ 
+ .form-section, .list-section {
+   background: var(--card);
+@@ -525,6 +550,17 @@ tbody tr:last-child td { border-bottom: none; }
+ .status-rejected { background: var(--danger-tint); color: var(--danger); }
+ .status-paid { background: var(--sky-tint); color: var(--sky-dark); }
+ 
++.team-label {
++  font-weight: 500;
++  text-transform: none;
++}
++.rejection-note {
++  margin-top: 0.3rem;
++  color: var(--danger);
++  font-size: 0.72rem;
++  max-width: 220px;
++}
++
+ @media (max-width: 700px) {
+   .admin-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+   .admin-grid { grid-template-columns: 1fr; }
